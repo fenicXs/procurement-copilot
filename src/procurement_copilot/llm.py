@@ -1,0 +1,184 @@
+"""LLM provider utilities — shared across RAG, Graph, and SQL answer modules.
+
+Fallback chain: OpenAI → Anthropic → Bytez → None.
+"""
+
+import logging
+import os
+from typing import Any
+
+from langchain_core.embeddings import Embeddings
+from langchain_core.language_models.chat_models import BaseChatModel
+from langchain_core.messages import AIMessage, BaseMessage
+
+from procurement_copilot.config import settings
+
+logger = logging.getLogger(__name__)
+
+
+def _get_key(name: str) -> str:
+    """Get an API key from os.environ first, then fall back to pydantic settings."""
+    return os.environ.get(name, "") or getattr(settings, name, "")
+
+
+class ChatBytez(BaseChatModel):
+    """Minimal LangChain-compatible wrapper around the Bytez Python SDK."""
+
+    api_key: str = ""
+    model_name: str = "openai/gpt-4.1-mini"
+    temperature: float = 0.0
+
+    @property
+    def _llm_type(self) -> str:
+        return "bytez"
+
+    def _generate(
+        self,
+        messages: list[BaseMessage],
+        stop: list[str] | None = None,
+        **kwargs: Any,
+    ) -> Any:
+        from bytez import Bytez
+        from langchain_core.outputs import ChatGeneration, ChatResult
+
+        sdk = Bytez(self.api_key)
+        model = sdk.model(self.model_name)
+
+        # Convert LangChain messages to OpenAI-style dicts
+        msg_dicts = []
+        for m in messages:
+            if m.type == "system":
+                msg_dicts.append({"role": "system", "content": m.content})
+            elif m.type == "human":
+                msg_dicts.append({"role": "user", "content": m.content})
+            elif m.type == "ai":
+                msg_dicts.append({"role": "assistant", "content": m.content})
+            else:
+                msg_dicts.append({"role": "user", "content": m.content})
+
+        result = model.run(msg_dicts)
+
+        if result.error:
+            raise RuntimeError(f"Bytez API error: {result.error}")
+
+        if isinstance(result.output, dict):
+            content = result.output.get("content", "")
+        else:
+            content = str(result.output)
+
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
+
+
+def get_llm() -> BaseChatModel | None:
+    """Get the best available chat model.
+
+    Fallback chain: OpenAI → Anthropic → Bytez → None.
+    """
+    if _get_key("OPENAI_API_KEY"):
+        from langchain_openai import ChatOpenAI
+
+        logger.info("Using OpenAI LLM provider.")
+        return ChatOpenAI(model="gpt-4o-mini", temperature=0)
+
+    if _get_key("ANTHROPIC_API_KEY"):
+        from langchain_anthropic import ChatAnthropic
+
+        logger.info("Using Anthropic LLM provider.")
+        return ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0)
+
+    bytez_key = _get_key("BYTEZ_API_KEY")
+    if bytez_key:
+        logger.info("Using Bytez LLM provider.")
+        return ChatBytez(
+            api_key=bytez_key,
+            model_name="openai/gpt-4.1-mini",
+            temperature=0,
+        )
+
+    return None
+
+
+class BytezEmbeddings(Embeddings):
+    """LangChain-compatible embeddings using Bytez SDK."""
+
+    def __init__(self, api_key: str, model_name: str = "openai/text-embedding-3-small"):
+        self.api_key = api_key
+        self.model_name = model_name
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
+        import time
+        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+        from bytez import Bytez
+
+        def _embed_one(idx_text: tuple[int, str]) -> tuple[int, list[float]]:
+            idx, text = idx_text
+            for attempt in range(5):
+                sdk = Bytez(self.api_key)
+                model = sdk.model(self.model_name)
+                result = model.run(text)
+                # Handle both Response objects and raw list returns
+                if isinstance(result, list):
+                    return (idx, result)
+                if hasattr(result, "error") and result.error:
+                    if "rate limit" in str(result.error).lower():
+                        time.sleep(2 * (attempt + 1))
+                        continue
+                    raise RuntimeError(f"Bytez embedding error: {result.error}")
+                return (idx, result.output)
+            raise RuntimeError(f"Bytez rate limit exceeded after retries for text {idx}")
+
+        results: list[tuple[int, list[float]]] = []
+        with ThreadPoolExecutor(max_workers=5) as pool:
+            futures = {pool.submit(_embed_one, (i, t)): i for i, t in enumerate(texts)}
+            done = 0
+            for future in as_completed(futures):
+                results.append(future.result())
+                done += 1
+                if done % 100 == 0:
+                    logger.info("Embedded %d / %d texts.", done, len(texts))
+
+        results.sort(key=lambda x: x[0])
+        return [emb for _, emb in results]
+
+    def embed_query(self, text: str) -> list[float]:
+        """Embed a single query text — direct call, no thread pool."""
+        import time
+
+        from bytez import Bytez
+
+        for attempt in range(5):
+            sdk = Bytez(self.api_key)
+            model = sdk.model(self.model_name)
+            result = model.run(text)
+            if isinstance(result, list):
+                return result
+            if hasattr(result, "error") and result.error:
+                if "rate limit" in str(result.error).lower():
+                    time.sleep(2 * (attempt + 1))
+                    continue
+                raise RuntimeError(f"Bytez embedding error: {result.error}")
+            return result.output
+        raise RuntimeError("Bytez rate limit exceeded after retries")
+
+
+def get_embeddings() -> Embeddings:
+    """Get the best available embedding model.
+
+    Fallback chain: OpenAI → Bytez → FakeEmbeddings.
+    """
+    if _get_key("OPENAI_API_KEY"):
+        from langchain_openai import OpenAIEmbeddings
+
+        logger.info("Using OpenAI embeddings.")
+        return OpenAIEmbeddings(model="text-embedding-3-small")
+
+    bytez_key = _get_key("BYTEZ_API_KEY")
+    if bytez_key:
+        logger.info("Using Bytez embeddings.")
+        return BytezEmbeddings(api_key=bytez_key)
+
+    from langchain_community.embeddings import FakeEmbeddings
+
+    logger.warning("No embedding provider — using FakeEmbeddings.")
+    return FakeEmbeddings(size=1536)

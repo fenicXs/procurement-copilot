@@ -1,0 +1,42 @@
+{"id": "rag_001", "category": "rag", "question": "What does FAR 6.302-1 say about sole-source contracting?", "expected_keywords": ["sole source", "6.302", "contracting officer", "one responsible source"], "expected_intent": "rag"}
+{"id": "rag_002", "category": "rag", "question": "When is sealed bidding required under the FAR?", "expected_keywords": ["sealed bidding", "competitive", "invitation for bids"], "expected_intent": "rag"}
+{"id": "rag_003", "category": "rag", "question": "What are the requirements for small business set-asides under FAR Part 19?", "expected_keywords": ["small business", "set-aside", "19"], "expected_intent": "rag"}
+{"id": "rag_004", "category": "rag", "question": "What is the simplified acquisition threshold?", "expected_keywords": ["simplified acquisition", "threshold"], "expected_intent": "rag"}
+{"id": "rag_005", "category": "rag", "question": "What role does the contracting officer play in source selection?", "expected_keywords": ["contracting officer", "source selection"], "expected_intent": "rag"}
+{"id": "rag_006", "category": "rag", "question": "What is a justification and approval (J&A) in federal procurement?", "expected_keywords": ["justification", "approval"], "expected_intent": "rag"}
+{"id": "rag_007", "category": "rag", "question": "What are the evaluation factors for best value procurement?", "expected_keywords": ["evaluation", "best value", "factors"], "expected_intent": "rag"}
+{"id": "rag_008", "category": "rag", "question": "What does the FAR say about organizational conflicts of interest?", "expected_keywords": ["conflict", "interest", "organizational"], "expected_intent": "rag"}
+{"id": "rag_009", "category": "rag", "question": "When can a contracting officer use other than full and open competition?", "expected_keywords": ["competition", "contracting officer"], "expected_intent": "rag"}
+{"id": "rag_010", "category": "rag", "question": "What are the requirements for market research before acquisition?", "expected_keywords": ["market research", "acquisition"], "expected_intent": "rag"}
+{"id": "rag_011", "category": "rag", "question": "What does FAR Part 15 cover regarding negotiated acquisitions?", "expected_keywords": ["negotiat", "15", "proposal"], "expected_intent": "rag"}
+{"id": "rag_012", "category": "rag", "question": "What is the micro-purchase threshold under the FAR?", "expected_keywords": ["micro-purchase", "threshold"], "expected_intent": "rag"}
+{"id": "rag_013", "category": "rag", "question": "What are the rules for contract modifications under the FAR?", "expected_keywords": ["modification", "contract"], "expected_intent": "rag"}
+{"id": "rag_014", "category": "rag", "question": "What does FAR 52.212-4 cover in commercial item acquisitions?", "expected_keywords": ["commercial", "52.212"], "expected_intent": "rag"}
+{"id": "rag_015", "category": "rag", "question": "What are the termination for convenience procedures?", "expected_keywords": ["termination", "convenience"], "expected_intent": "rag"}
+{"id": "rag_016", "category": "rag", "question": "What does the FAR say about cost accounting standards?", "expected_keywords": ["cost accounting", "standard"], "expected_intent": "rag"}
+{"id": "rag_017", "category": "rag", "question": "What are the past performance evaluation requirements?", "expected_keywords": ["past performance", "evaluation"], "expected_intent": "rag"}
+{"id": "rag_018", "category": "rag", "question": "What does the FAR require for subcontracting plans?", "expected_keywords": ["subcontracting", "plan"], "expected_intent": "rag"}
+{"id": "rag_019", "category": "rag", "question": "What are the rules for fixed-price contracts?", "expected_keywords": ["fixed-price", "contract"], "expected_intent": "rag"}
+{"id": "rag_020", "category": "rag", "question": "What does the FAR say about protests and disputes?", "expected_keywords": ["protest", "dispute"], "expected_intent": "rag"}
+{"id": "sql_001", "category": "sql", "question": "How much total spending has been awarded across all contracts?", "expected_keywords": ["total", "spending", "amount"], "expected_intent": "sql"}
+{"id": "sql_002", "category": "sql", "question": "What are the top 10 recipients by total award amount?", "expected_keywords": ["recipient", "top", "amount"], "expected_intent": "sql"}
+{"id": "sql_003", "category": "sql", "question": "How many awards are there in the database?", "expected_keywords": ["count", "award"], "expected_intent": "sql"}
+{"id": "sql_004", "category": "sql", "question": "What is the total spending by each agency?", "expected_keywords": ["agency", "total", "spending"], "expected_intent": "sql"}
+{"id": "sql_005", "category": "sql", "question": "What is the average award amount across all contracts?", "expected_keywords": ["average", "award", "amount"], "expected_intent": "sql"}
+{"id": "sql_006", "category": "sql", "question": "How many awards are there by contract type?", "expected_keywords": ["contract", "type", "count"], "expected_intent": "sql"}
+{"id": "sql_007", "category": "sql", "question": "What are the largest awards by dollar amount?", "expected_keywords": ["largest", "award", "amount"], "expected_intent": "sql"}
+{"id": "sql_008", "category": "sql", "question": "How much has the Department of Defense spent on contracts?", "expected_keywords": ["defense", "spent", "amount"], "expected_intent": "sql"}
+{"id": "sql_009", "category": "sql", "question": "What is the total spending by the top 5 contractors?", "expected_keywords": ["top", "contractor", "spending"], "expected_intent": "sql"}
+{"id": "sql_010", "category": "sql", "question": "How many awards were made per agency?", "expected_keywords": ["awards", "agency", "count"], "expected_intent": "sql"}
+{"id": "graph_001", "category": "graph", "question": "Show the graph triples connected to sole source", "expected_keywords": ["sole source", "triple"], "expected_intent": "graph"}
+{"id": "graph_002", "category": "graph", "question": "What entities are connected to the contracting officer in the knowledge graph?", "expected_keywords": ["contracting officer", "connected", "graph"], "expected_intent": "graph"}
+{"id": "graph_003", "category": "graph", "question": "Which FAR sections reference each other according to the graph?", "expected_keywords": ["reference", "section", "graph"], "expected_intent": "graph"}
+{"id": "graph_004", "category": "graph", "question": "Show the triples that define evaluation factors", "expected_keywords": ["evaluation", "factors", "triple"], "expected_intent": "graph"}
+{"id": "graph_005", "category": "graph", "question": "What entities are linked to small business in the knowledge graph?", "expected_keywords": ["small business", "linked", "graph"], "expected_intent": "graph"}
+{"id": "graph_006", "category": "graph", "question": "Show all relationships for FAR section 15.304 in the graph", "expected_keywords": ["15.304", "relationship", "graph"], "expected_intent": "graph"}
+{"id": "graph_007", "category": "graph", "question": "What does the knowledge graph show about competition references?", "expected_keywords": ["competition", "reference", "graph"], "expected_intent": "graph"}
+{"id": "graph_008", "category": "graph", "question": "Show the connected entities for negotiation in the graph", "expected_keywords": ["negotiation", "connected", "graph"], "expected_intent": "graph"}
+{"id": "graph_009", "category": "graph", "question": "What graph triples involve the authorizes relationship?", "expected_keywords": ["authorizes", "triple", "graph"], "expected_intent": "graph"}
+{"id": "graph_010", "category": "graph", "question": "Show multi-hop connections from sole source in the knowledge graph", "expected_keywords": ["sole source", "multi-hop", "graph"], "expected_intent": "graph"}
+{"id": "mixed_001", "category": "mixed", "question": "What does FAR say about sole-source contracting and how much has been spent on sole-source contracts?", "expected_keywords": ["sole source", "FAR", "spent", "amount"], "expected_intent": "mixed"}
+{"id": "mixed_002", "category": "mixed", "question": "Explain the small business set-aside requirements and show related graph entities", "expected_keywords": ["small business", "set-aside", "related", "entities"], "expected_intent": "mixed"}

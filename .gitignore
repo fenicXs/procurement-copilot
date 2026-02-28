@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Data (downloaded at runtime)
+data/raw/
+data/processed/
+
+# Eval outputs (generated)
+eval/report.md
+
+# OS
+.DS_Store
+Thumbs.db

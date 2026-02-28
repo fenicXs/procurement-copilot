@@ -1,0 +1,58 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "procurement-copilot"
+version = "0.1.0"
+description = "Enterprise Procurement Copilot – agentic RAG, NL-to-SQL, and GraphRAG over FAR policy and USAspending data"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+dependencies = [
+    "langchain>=0.3,<0.4",
+    "langgraph>=0.2,<0.4",
+    "langchain-openai>=0.2,<0.4",
+    "langchain-anthropic>=0.3,<0.4",
+    "langchain-community>=0.3,<0.4",
+    "duckdb>=1.0,<2",
+    "faiss-cpu>=1.8,<2",
+    "fastapi>=0.115,<1",
+    "uvicorn[standard]>=0.32,<1",
+    "pydantic-settings>=2.6,<3",
+    "httpx>=0.27,<1",
+    "pypdf>=5.0,<6",
+    "bytez>=1,<2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<9",
+    "pytest-asyncio>=0.24,<1",
+    "ruff>=0.8,<1",
+    "black>=24,<26",
+    "mypy>=1.13,<2",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/procurement_copilot"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W"]
+
+[tool.black]
+target-version = ["py311"]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
