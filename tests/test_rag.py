@@ -11,7 +11,9 @@ from procurement_copilot.rag.answer import (
     _format_context,
     generate_rag_answer,
 )
-from procurement_copilot.rag.retriever import RetrievedChunk, retrieve
+from procurement_copilot.rag.retriever import RetrievedChunk, _rerank, retrieve
+
+from ._qdrant_fixtures import build_tmp_qdrant_index
 
 # --- Unit tests for answer utilities ---
 
@@ -72,76 +74,126 @@ class TestGenerateRAGAnswer:
         assert "approvals" in result.answer.lower()
 
 
-# --- Integration test for retrieval with a temp FAISS index ---
+# --- Unit test for the cross-encoder reranker (mocked — no real model download) ---
+
+
+class _StubReranker:
+    """Deterministic stand-in for sentence_transformers.CrossEncoder.predict."""
+
+    def __init__(self, score_by_text: dict[str, float]):
+        self._score_by_text = score_by_text
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        return [self._score_by_text[text] for _, text in pairs]
+
+
+class TestRerank:
+    def test_reorders_by_cross_encoder_score(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Reranking must reorder by the cross-encoder's score, not input order
+        or any heading-overlap heuristic (the retired behavior)."""
+        low = _make_chunk("low", "irrelevant text")
+        high = _make_chunk("high", "highly relevant text")
+        stub = _StubReranker({"irrelevant text": 0.1, "highly relevant text": 0.9})
+        monkeypatch.setattr("procurement_copilot.rag.retriever._get_reranker", lambda: stub)
+
+        reranked = _rerank("relevant query", [low, high])
+
+        assert [c.chunk_id for c in reranked] == ["high", "low"]
+        assert reranked[0].score == 0.9
+
+    def test_empty_candidates_returns_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        called = False
+
+        def _should_not_be_called():
+            nonlocal called
+            called = True
+            raise AssertionError("reranker should not load for an empty candidate list")
+
+        monkeypatch.setattr(
+            "procurement_copilot.rag.retriever._get_reranker", _should_not_be_called
+        )
+        assert _rerank("query", []) == []
+        assert not called
+
+
+# --- Integration test for retrieval with a temp Qdrant index ---
 
 
 @pytest.fixture()
-def tmp_faiss_index(tmp_path: Path) -> Path:
-    """Build a small FAISS index from synthetic chunks for testing."""
-    from langchain_community.embeddings import FakeEmbeddings
-    from langchain_community.vectorstores import FAISS
-    from langchain_core.documents import Document
+def tmp_qdrant_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Build a small local Qdrant index and stub the reranker (text-length
+    based, deterministic) so these tests don't download the real ~1GB
+    cross-encoder model."""
 
-    docs = [
-        Document(
-            page_content="The contracting officer must obtain approval from the agency head "
-            "for sole-source contracts exceeding the simplified acquisition threshold.",
-            metadata={
-                "chunk_id": "far_chunk_00001",
-                "page_start": 10,
-                "page_end": 11,
-                "section_heading": "6.302-1",
-                "source_url": "https://www.acquisition.gov/far",
-            },
-        ),
-        Document(
-            page_content="Small business set-asides are required when the anticipated "
-            "contract value exceeds $250,000 and there are at least two responsible "
-            "small business concerns.",
-            metadata={
-                "chunk_id": "far_chunk_00002",
-                "page_start": 42,
-                "page_end": 43,
-                "section_heading": "19.502-2",
-                "source_url": "https://www.acquisition.gov/far",
-            },
-        ),
-        Document(
-            page_content="Cost accounting standards apply to negotiated contracts "
-            "exceeding $2 million unless exempt under 48 CFR 9903.",
-            metadata={
-                "chunk_id": "far_chunk_00003",
-                "page_start": 100,
-                "page_end": 101,
-                "section_heading": "30.201-4",
-                "source_url": "https://www.acquisition.gov/far",
-            },
-        ),
+    class _LengthReranker:
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            return [float(len(text)) for _, text in pairs]
+
+    monkeypatch.setattr(
+        "procurement_copilot.rag.retriever._get_reranker", lambda: _LengthReranker()
+    )
+
+    chunks = [
+        {
+            "chunk_id": "far_chunk_00001",
+            "text": (
+                "The contracting officer must obtain approval from the agency head "
+                "for sole-source contracts exceeding the simplified acquisition threshold."
+            ),
+            "page_start": 10,
+            "page_end": 11,
+            "section_heading": "6.302-1",
+            "source_url": "https://www.acquisition.gov/far",
+        },
+        {
+            "chunk_id": "far_chunk_00002",
+            "text": (
+                "Small business set-asides are required when the anticipated "
+                "contract value exceeds $250,000 and there are at least two "
+                "responsible small business concerns."
+            ),
+            "page_start": 42,
+            "page_end": 43,
+            "section_heading": "19.502-2",
+            "source_url": "https://www.acquisition.gov/far",
+        },
+        {
+            "chunk_id": "far_chunk_00003",
+            "text": (
+                "Cost accounting standards apply to negotiated contracts "
+                "exceeding $2 million unless exempt under 48 CFR 9903."
+            ),
+            "page_start": 100,
+            "page_end": 101,
+            "section_heading": "30.201-4",
+            "source_url": "https://www.acquisition.gov/far",
+        },
     ]
-
-    embeddings = FakeEmbeddings(size=1536)
-    vs = FAISS.from_documents(docs, embeddings)
-    index_dir = tmp_path / "test_index"
-    vs.save_local(str(index_dir))
-    return index_dir
+    return build_tmp_qdrant_index(tmp_path, chunks)
 
 
 class TestRetrieval:
-    def test_retrieve_returns_chunks(self, tmp_faiss_index: Path) -> None:
-        results = retrieve("sole source approval", top_k=2, index_dir=tmp_faiss_index)
+    def test_retrieve_returns_chunks(self, tmp_qdrant_index: Path) -> None:
+        results = retrieve("sole source approval", top_k=2, index_dir=tmp_qdrant_index)
         assert len(results) <= 2
         assert all(isinstance(r, RetrievedChunk) for r in results)
 
-    def test_retrieve_has_metadata(self, tmp_faiss_index: Path) -> None:
-        results = retrieve("small business", top_k=3, index_dir=tmp_faiss_index)
+    def test_retrieve_has_metadata(self, tmp_qdrant_index: Path) -> None:
+        results = retrieve("small business", top_k=3, index_dir=tmp_qdrant_index)
         assert len(results) > 0
         first = results[0]
         assert first.chunk_id.startswith("far_chunk_")
         assert first.page_start > 0
         assert first.source_url == "https://www.acquisition.gov/far"
 
-    def test_retrieve_returns_all_from_small_index(self, tmp_faiss_index: Path) -> None:
+    def test_retrieve_returns_all_from_small_index(self, tmp_qdrant_index: Path) -> None:
         """With only 3 docs and top_k=3, all chunks should be returned."""
-        results = retrieve("any query", top_k=3, index_dir=tmp_faiss_index)
+        results = retrieve("any query", top_k=3, index_dir=tmp_qdrant_index)
         ids = {c.chunk_id for c in results}
         assert ids == {"far_chunk_00001", "far_chunk_00002", "far_chunk_00003"}
+
+    def test_retrieve_ranked_best_first(self, tmp_qdrant_index: Path) -> None:
+        """Results must be sorted by (stub) reranker score, descending."""
+        results = retrieve("any query", top_k=3, index_dir=tmp_qdrant_index)
+        scores = [c.score for c in results]
+        assert scores == sorted(scores, reverse=True)

@@ -4,9 +4,6 @@ from pathlib import Path
 
 import duckdb
 import pytest
-from langchain_community.embeddings import FakeEmbeddings
-from langchain_community.vectorstores import FAISS
-from langchain_core.documents import Document
 
 from procurement_copilot.orchestrator.graph import (
     CopilotResponse,
@@ -26,45 +23,48 @@ from procurement_copilot.orchestrator.verifier import (
     verify_answer,
 )
 
+from ._qdrant_fixtures import build_tmp_qdrant_index
+
 # --- Fixtures ---
 
 
 @pytest.fixture()
-def tmp_faiss_index(tmp_path: Path) -> Path:
-    """Build a small FAISS index for orchestrator tests."""
-    docs = [
-        Document(
-            page_content=(
+def tmp_qdrant_index(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    """Build a small local Qdrant index for orchestrator tests."""
+
+    class _LengthReranker:
+        def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+            return [float(len(text)) for _, text in pairs]
+
+    monkeypatch.setattr(
+        "procurement_copilot.rag.retriever._get_reranker", lambda: _LengthReranker()
+    )
+
+    chunks = [
+        {
+            "chunk_id": "far_chunk_00001",
+            "text": (
                 "The contracting officer must obtain approval from the agency head "
                 "for sole-source contracts exceeding the simplified acquisition threshold."
             ),
-            metadata={
-                "chunk_id": "far_chunk_00001",
-                "page_start": 10,
-                "page_end": 11,
-                "section_heading": "6.302-1",
-                "source_url": "https://www.acquisition.gov/far",
-            },
-        ),
-        Document(
-            page_content=(
+            "page_start": 10,
+            "page_end": 11,
+            "section_heading": "6.302-1",
+            "source_url": "https://www.acquisition.gov/far",
+        },
+        {
+            "chunk_id": "far_chunk_00002",
+            "text": (
                 "Small business set-asides are required when the anticipated "
                 "contract value exceeds $250,000."
             ),
-            metadata={
-                "chunk_id": "far_chunk_00002",
-                "page_start": 42,
-                "page_end": 43,
-                "section_heading": "19.502-2",
-                "source_url": "https://www.acquisition.gov/far",
-            },
-        ),
+            "page_start": 42,
+            "page_end": 43,
+            "section_heading": "19.502-2",
+            "source_url": "https://www.acquisition.gov/far",
+        },
     ]
-    embeddings = FakeEmbeddings(size=1536)
-    vs = FAISS.from_documents(docs, embeddings)
-    index_dir = tmp_path / "test_index"
-    vs.save_local(str(index_dir))
-    return index_dir
+    return build_tmp_qdrant_index(tmp_path, chunks)
 
 
 @pytest.fixture()
@@ -157,6 +157,47 @@ class TestClassifyIntent:
         assert intent == INTENT_RAG
 
 
+class _StubLLM:
+    """Returns one canned response per .invoke() call, in order."""
+
+    def __init__(self, responses: list[str]):
+        self._responses = list(responses)
+        self.calls: list[list] = []
+
+    def invoke(self, messages: list):
+        from dataclasses import dataclass
+
+        @dataclass
+        class _Resp:
+            content: str
+
+        self.calls.append(messages)
+        return _Resp(content=self._responses.pop(0))
+
+
+class TestClassifyIntentLLM:
+    """classify_intent() dispatches to the LLM when a provider is configured."""
+
+    def test_uses_llm_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        stub = _StubLLM(["sql"])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        intent = classify_intent("This wouldn't match any regex pattern at all")
+
+        assert intent == INTENT_SQL
+        assert len(stub.calls) == 1
+
+    def test_falls_back_to_regex_on_unparseable_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        stub = _StubLLM(["I'm not sure, maybe something else entirely"])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        intent = classify_intent("How much total spending by agency?")
+
+        assert intent == INTENT_SQL  # regex fallback still gets this right
+
+
 # --- Verifier tests ---
 
 
@@ -231,9 +272,9 @@ class TestVerifierNode:
 
 
 class TestBuildGraph:
-    def test_graph_compiles(self, tmp_faiss_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
+    def test_graph_compiles(self, tmp_qdrant_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
         app = build_graph(
-            index_dir=tmp_faiss_index,
+            index_dir=tmp_qdrant_index,
             db_path=tmp_db,
             kg_path=tmp_kg,
         )
@@ -241,10 +282,10 @@ class TestBuildGraph:
 
 
 class TestRunQuery:
-    def test_rag_query(self, tmp_faiss_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
+    def test_rag_query(self, tmp_qdrant_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
         result = run_query(
             "What does FAR 6.302 say about sole-source?",
-            index_dir=tmp_faiss_index,
+            index_dir=tmp_qdrant_index,
             db_path=tmp_db,
             kg_path=tmp_kg,
         )
@@ -252,10 +293,10 @@ class TestRunQuery:
         assert result.intent == INTENT_RAG
         assert len(result.answer) > 0
 
-    def test_sql_query(self, tmp_faiss_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
+    def test_sql_query(self, tmp_qdrant_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
         result = run_query(
             "How much total spending by agency?",
-            index_dir=tmp_faiss_index,
+            index_dir=tmp_qdrant_index,
             db_path=tmp_db,
             kg_path=tmp_kg,
         )
@@ -263,10 +304,10 @@ class TestRunQuery:
         assert result.intent == INTENT_SQL
         assert len(result.answer) > 0
 
-    def test_graph_query(self, tmp_faiss_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
+    def test_graph_query(self, tmp_qdrant_index: Path, tmp_db: Path, tmp_kg: Path) -> None:
         result = run_query(
             "Show the graph triples connected to this entity",
-            index_dir=tmp_faiss_index,
+            index_dir=tmp_qdrant_index,
             db_path=tmp_db,
             kg_path=tmp_kg,
         )
@@ -275,12 +316,96 @@ class TestRunQuery:
         assert len(result.answer) > 0
 
     def test_response_has_verification(
-        self, tmp_faiss_index: Path, tmp_db: Path, tmp_kg: Path
+        self, tmp_qdrant_index: Path, tmp_db: Path, tmp_kg: Path
     ) -> None:
         result = run_query(
             "How many awards are there?",
-            index_dir=tmp_faiss_index,
+            index_dir=tmp_qdrant_index,
             db_path=tmp_db,
             kg_path=tmp_kg,
         )
         assert isinstance(result.is_verified, bool)
+
+
+# --- NL-to-SQL and SQL summary: LLM path + template fallback ---
+
+
+class TestNLToSQLLLM:
+    def test_uses_llm_sql_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.orchestrator.graph import _nl_to_sql
+
+        stub = _StubLLM(["SELECT recipient_name FROM awards LIMIT 5"])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        sql = _nl_to_sql("Who are the top recipients?", {"awards": []})
+
+        assert sql == "SELECT recipient_name FROM awards LIMIT 5"
+        assert len(stub.calls) == 1
+
+    def test_strips_markdown_fences(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.orchestrator.graph import _nl_to_sql
+
+        stub = _StubLLM(["```sql\nSELECT COUNT(*) FROM awards\n```"])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        sql = _nl_to_sql("How many awards?", {"awards": []})
+
+        assert sql == "SELECT COUNT(*) FROM awards"
+
+    def test_falls_back_to_template_on_non_select_response(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.orchestrator.graph import _nl_to_sql
+
+        stub = _StubLLM(["I don't know how to write that query."])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        sql = _nl_to_sql("How many awards?", {"awards": []})
+
+        assert sql.upper().startswith("SELECT")  # template fallback
+
+    def test_offline_uses_template_directly(self) -> None:
+        from procurement_copilot.orchestrator.graph import _nl_to_sql
+
+        sql = _nl_to_sql("How many awards?", {"awards": []})
+
+        assert sql == "SELECT COUNT(*) AS award_count FROM awards"
+
+
+class TestSummarizeSQLResultLLM:
+    def test_uses_llm_narration_when_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.orchestrator.graph import _summarize_sql_result
+
+        stub = _StubLLM(["ACME Corp received the largest award, at $1,000,000."])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        summary = _summarize_sql_result(
+            "Who got the largest award?",
+            ["recipient_name", "award_amount"],
+            [("ACME Corp", 1_000_000)],
+        )
+
+        assert summary == "ACME Corp received the largest award, at $1,000,000."
+
+    def test_offline_falls_back_to_stringified_table(self) -> None:
+        from procurement_copilot.orchestrator.graph import _summarize_sql_result
+
+        summary = _summarize_sql_result(
+            "Who got the largest award?",
+            ["recipient_name", "award_amount"],
+            [("ACME Corp", 1_000_000)],
+        )
+
+        assert "ACME Corp" in summary
+        assert "Query returned 1 row(s)" in summary
+
+    def test_no_rows_short_circuits_without_llm_call(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.orchestrator.graph import _summarize_sql_result
+
+        stub = _StubLLM([])
+        monkeypatch.setattr("procurement_copilot.llm.get_llm", lambda: stub)
+
+        summary = _summarize_sql_result("Any awards?", ["recipient_name"], [])
+
+        assert summary == "The query returned no results."
+        assert stub.calls == []

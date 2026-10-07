@@ -1,14 +1,31 @@
-"""Evaluation harness: run gold questions through the orchestrator and report metrics.
+"""RAGAS-based evaluation harness: run gold questions through the orchestrator
+and score answers semantically with an LLM judge, replacing the legacy
+keyword-substring matching (preserved in run_eval_legacy.py for comparison).
 
 Usage:
     python scripts/run_eval.py [--questions eval/gold_questions.jsonl]
-                               [--report eval/report.md]
+                               [--results-dir eval/results]
                                [--index-dir data/processed/vector_index]
                                [--db-path data/processed/procurement.duckdb]
                                [--kg-path data/processed/kg.parquet]
 
-Produces eval/report.md with retrieval, groundedness, SQL success, and
-intent-routing metrics.
+Metrics (via RAGAS, judged by Ollama/Gemma — EVAL_JUDGE_PROVIDER):
+  - faithfulness:      are the answer's claims backed by retrieved evidence?
+                        (all questions)
+  - answer_relevancy:  does the answer address the question asked?
+                        (all questions)
+  - context_precision: were the retrieved chunks actually useful?
+                        (only the subset of gold questions with a hand-written
+                        `reference` answer — ~10 RAG questions)
+  - context_recall:    did retrieval pull in everything needed?
+                        (same reference-bearing subset)
+
+NOTE on judge bias: the judge (Gemma) is the same model used for generation
+in our live tests. This risks self-evaluation bias — a model may rate its
+own style/blind-spots more favorably. Faithfulness is the metric least
+exposed to this (it's closer to mechanical text-overlap-with-context
+checking); answer_relevancy leans more on subjective judgment and should be
+read with that caveat. See eval/results/comparison_report.md for discussion.
 """
 
 import argparse
@@ -16,7 +33,8 @@ import json
 import logging
 import sys
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -25,50 +43,43 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 DEFAULT_QUESTIONS = _PROJECT_ROOT / "eval" / "gold_questions.jsonl"
-DEFAULT_REPORT = _PROJECT_ROOT / "eval" / "report.md"
+DEFAULT_RESULTS_DIR = _PROJECT_ROOT / "eval" / "results"
 DEFAULT_INDEX_DIR = _PROJECT_ROOT / "data" / "processed" / "vector_index"
 DEFAULT_DB_PATH = _PROJECT_ROOT / "data" / "processed" / "procurement.duckdb"
 DEFAULT_KG_PATH = _PROJECT_ROOT / "data" / "processed" / "kg.parquet"
 
+# This hits a single local Ollama GPU instance serving one model, not a
+# scaled API — concurrency doesn't parallelize real compute here, it just
+# queues requests behind each other (and risks GPU memory contention), so
+# max_workers=1 is strictly sequential. Multi-step metrics like faithfulness
+# chain several LLM calls per sample (extract claims, then verify each),
+# and this model's per-call latency runs 30-90s, so a generous per-job
+# timeout avoids spurious TimeoutErrors (confirmed empirically: 180s was too
+# short and produced NaN faithfulness/context_precision/context_recall).
+JUDGE_MAX_WORKERS = 1
+JUDGE_TIMEOUT_SECONDS = 600
+
 
 @dataclass
-class QuestionResult:
-    """Result of evaluating a single question."""
+class EvalRow:
+    """One gold question run through the orchestrator, ready for RAGAS scoring."""
 
     question_id: str
     category: str
     question: str
+    answer: str
+    contexts: list[str]
+    reference: str | None
     expected_intent: str
     actual_intent: str
     intent_correct: bool
-    answer: str
-    has_answer: bool
-    keyword_hits: int
-    keyword_total: int
-    keyword_recall: float
     is_verified: bool
     sql_query: str
-    sql_success: bool
     latency_ms: float
     error: str | None = None
 
 
-@dataclass
-class EvalMetrics:
-    """Aggregated evaluation metrics."""
-
-    total_questions: int = 0
-    intent_accuracy: float = 0.0
-    answer_rate: float = 0.0
-    avg_keyword_recall: float = 0.0
-    groundedness_rate: float = 0.0
-    sql_success_rate: float = 0.0
-    avg_latency_ms: float = 0.0
-    results_by_category: dict[str, dict] = field(default_factory=dict)
-
-
 def _load_questions(path: Path) -> list[dict]:
-    """Load gold questions from JSONL."""
     questions = []
     with open(path, encoding="utf-8") as f:
         for line in f:
@@ -78,70 +89,44 @@ def _load_questions(path: Path) -> list[dict]:
     return questions
 
 
-def _compute_keyword_recall(answer: str, expected_keywords: list[str]) -> tuple[int, int, float]:
-    """Compute how many expected keywords appear in the answer."""
-    if not expected_keywords:
-        return 0, 0, 1.0
-
-    answer_lower = answer.lower()
-    hits = sum(1 for kw in expected_keywords if kw.lower() in answer_lower)
-    total = len(expected_keywords)
-    recall = hits / total if total > 0 else 0.0
-    return hits, total, recall
-
-
-def evaluate_questions(
+def collect_eval_rows(
     questions: list[dict],
     index_dir: Path,
     db_path: Path,
     kg_path: Path,
-) -> list[QuestionResult]:
-    """Run each question through the orchestrator and collect results."""
+) -> list[EvalRow]:
+    """Run each gold question through the orchestrator and collect RAGAS-ready rows."""
     from procurement_copilot.orchestrator.graph import run_query
 
-    results: list[QuestionResult] = []
+    rows: list[EvalRow] = []
 
     for i, q in enumerate(questions, 1):
         qid = q.get("id", f"q_{i}")
-        category = q.get("category", "unknown")
-        question = q["question"]
-        expected_intent = q.get("expected_intent", "")
-        expected_keywords = q.get("expected_keywords", [])
-
-        logger.info("[%d/%d] Evaluating: %s", i, len(questions), qid)
+        logger.info("[%d/%d] Running: %s", i, len(questions), qid)
 
         start = time.perf_counter()
         try:
             response = run_query(
-                question,
+                q["question"],
                 index_dir=index_dir,
                 db_path=db_path,
                 kg_path=kg_path,
+                session_id=f"ragas-eval-{qid}",
             )
             elapsed_ms = (time.perf_counter() - start) * 1000
-
-            hits, total, recall = _compute_keyword_recall(response.answer, expected_keywords)
-
-            sql_success = True
-            if category == "sql" and response.sql_query:
-                sql_success = "error" not in response.answer.lower()
-
-            results.append(
-                QuestionResult(
+            rows.append(
+                EvalRow(
                     question_id=qid,
-                    category=category,
-                    question=question,
-                    expected_intent=expected_intent,
-                    actual_intent=response.intent,
-                    intent_correct=response.intent == expected_intent,
+                    category=q.get("category", "unknown"),
+                    question=q["question"],
                     answer=response.answer,
-                    has_answer=len(response.answer) > 0,
-                    keyword_hits=hits,
-                    keyword_total=total,
-                    keyword_recall=recall,
+                    contexts=response.contexts or [""],  # ragas requires non-empty
+                    reference=q.get("reference"),
+                    expected_intent=q.get("expected_intent", ""),
+                    actual_intent=response.intent,
+                    intent_correct=response.intent == q.get("expected_intent", ""),
                     is_verified=response.is_verified,
                     sql_query=response.sql_query,
-                    sql_success=sql_success,
                     latency_ms=elapsed_ms,
                     error=response.error,
                 )
@@ -149,152 +134,196 @@ def evaluate_questions(
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000
             logger.exception("Error evaluating %s", qid)
-            results.append(
-                QuestionResult(
+            rows.append(
+                EvalRow(
                     question_id=qid,
-                    category=category,
-                    question=question,
-                    expected_intent=expected_intent,
+                    category=q.get("category", "unknown"),
+                    question=q["question"],
+                    answer="",
+                    contexts=[""],
+                    reference=q.get("reference"),
+                    expected_intent=q.get("expected_intent", ""),
                     actual_intent="error",
                     intent_correct=False,
-                    answer="",
-                    has_answer=False,
-                    keyword_hits=0,
-                    keyword_total=len(expected_keywords),
-                    keyword_recall=0.0,
                     is_verified=False,
                     sql_query="",
-                    sql_success=False,
                     latency_ms=elapsed_ms,
                     error=str(exc),
                 )
             )
 
-    return results
+    return rows
 
 
-def compute_metrics(results: list[QuestionResult]) -> EvalMetrics:
-    """Aggregate individual results into summary metrics."""
-    n = len(results)
-    if n == 0:
-        return EvalMetrics()
+def build_judge():  # type: ignore[no-untyped-def]
+    """Build the RAGAS-wrapped LLM judge and embeddings.
 
-    metrics = EvalMetrics(total_questions=n)
-    metrics.intent_accuracy = sum(r.intent_correct for r in results) / n
-    metrics.answer_rate = sum(r.has_answer for r in results) / n
-    metrics.avg_keyword_recall = sum(r.keyword_recall for r in results) / n
-    metrics.groundedness_rate = sum(r.is_verified for r in results) / n
-    metrics.avg_latency_ms = sum(r.latency_ms for r in results) / n
+    Always Ollama today (the only free/local option we have) — the
+    EVAL_JUDGE_PROVIDER setting documents the intent to force this
+    regardless of what provider answers queries, keeping eval cost at zero
+    even if a cloud key is configured for generation.
+    """
+    from langchain_ollama import ChatOllama, OllamaEmbeddings
+    from ragas.embeddings import LangchainEmbeddingsWrapper
+    from ragas.llms import LangchainLLMWrapper
 
-    # SQL success rate (only for SQL questions)
-    sql_results = [r for r in results if r.category == "sql"]
-    if sql_results:
-        metrics.sql_success_rate = sum(r.sql_success for r in sql_results) / len(sql_results)
+    from procurement_copilot.config import settings
 
-    # Per-category breakdown
-    categories = sorted({r.category for r in results})
-    for cat in categories:
-        cat_results = [r for r in results if r.category == cat]
-        cat_n = len(cat_results)
-        metrics.results_by_category[cat] = {
-            "count": cat_n,
-            "intent_accuracy": sum(r.intent_correct for r in cat_results) / cat_n,
-            "answer_rate": sum(r.has_answer for r in cat_results) / cat_n,
-            "avg_keyword_recall": sum(r.keyword_recall for r in cat_results) / cat_n,
-            "groundedness_rate": sum(r.is_verified for r in cat_results) / cat_n,
-            "avg_latency_ms": sum(r.latency_ms for r in cat_results) / cat_n,
-        }
-
-    return metrics
-
-
-def generate_report(metrics: EvalMetrics, results: list[QuestionResult], output_path: Path) -> None:
-    """Write evaluation report as Markdown."""
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-
-    lines: list[str] = []
-    lines.append("# Procurement Copilot — Evaluation Report\n")
-    lines.append(f"**Total questions evaluated:** {metrics.total_questions}\n")
-
-    # Overall metrics table
-    lines.append("## Overall Metrics\n")
-    lines.append("| Metric | Value |")
-    lines.append("|--------|-------|")
-    lines.append(f"| Intent Routing Accuracy | {metrics.intent_accuracy:.1%} |")
-    lines.append(f"| Answer Rate | {metrics.answer_rate:.1%} |")
-    lines.append(f"| Avg Keyword Recall | {metrics.avg_keyword_recall:.1%} |")
-    lines.append(f"| Groundedness Rate | {metrics.groundedness_rate:.1%} |")
-    lines.append(f"| SQL Execution Success | {metrics.sql_success_rate:.1%} |")
-    lines.append(f"| Avg Latency | {metrics.avg_latency_ms:.0f} ms |")
-    lines.append("")
-
-    # Per-category breakdown
-    lines.append("## Results by Category\n")
-    lines.append(
-        "| Category | Count | Intent Acc | Answer Rate "
-        "| Keyword Recall | Grounded | Avg Latency |"
-    )
-    lines.append(
-        "|----------|-------|------------|-------------|"
-        "----------------|----------|-------------|"
-    )
-    for cat, stats in sorted(metrics.results_by_category.items()):
-        lines.append(
-            f"| {cat} | {stats['count']} "
-            f"| {stats['intent_accuracy']:.1%} "
-            f"| {stats['answer_rate']:.1%} "
-            f"| {stats['avg_keyword_recall']:.1%} "
-            f"| {stats['groundedness_rate']:.1%} "
-            f"| {stats['avg_latency_ms']:.0f} ms |"
+    if settings.EVAL_JUDGE_PROVIDER != "ollama":
+        raise NotImplementedError(
+            f"EVAL_JUDGE_PROVIDER={settings.EVAL_JUDGE_PROVIDER!r} not supported — "
+            "only 'ollama' is implemented."
         )
-    lines.append("")
 
-    # Sample results (first 3 per category)
-    lines.append("## Sample Results\n")
-    categories = sorted({r.category for r in results})
-    for cat in categories:
-        lines.append(f"### {cat.upper()} Examples\n")
-        cat_results = [r for r in results if r.category == cat][:3]
-        for r in cat_results:
-            lines.append(f"**Q ({r.question_id}):** {r.question}\n")
-            lines.append(
-                f"- **Intent:** {r.actual_intent} "
-                f"({'correct' if r.intent_correct else 'WRONG'})"
+    judge_llm = ChatOllama(
+        base_url=settings.OLLAMA_BASE_URL,
+        model=settings.OLLAMA_MODEL,
+        temperature=0,
+        num_ctx=settings.OLLAMA_NUM_CTX,
+    )
+    judge_embeddings = OllamaEmbeddings(
+        base_url=settings.OLLAMA_BASE_URL, model=settings.OLLAMA_EMBED_MODEL
+    )
+
+    return (
+        LangchainLLMWrapper(judge_llm),
+        LangchainEmbeddingsWrapper(judge_embeddings),
+    )
+
+
+def _rows_to_samples(rows: list[EvalRow], require_reference: bool) -> list:  # type: ignore[no-untyped-def]
+    from ragas.dataset_schema import SingleTurnSample
+
+    samples = []
+    for r in rows:
+        if require_reference and not r.reference:
+            continue
+        samples.append(
+            SingleTurnSample(
+                user_input=r.question,
+                response=r.answer or "(no answer produced)",
+                retrieved_contexts=r.contexts,
+                reference=r.reference or "",
             )
-            lines.append(
-                f"- **Keyword Recall:** {r.keyword_recall:.0%} "
-                f"({r.keyword_hits}/{r.keyword_total})"
-            )
-            lines.append(f"- **Verified:** {'Yes' if r.is_verified else 'No'}")
-            lines.append(f"- **Latency:** {r.latency_ms:.0f} ms")
-            if r.sql_query:
-                lines.append(f"- **SQL:** `{r.sql_query}`")
-            if r.error:
-                lines.append(f"- **Error:** {r.error}")
-            # Truncated answer preview
-            preview = r.answer[:200].replace("\n", " ")
-            if len(r.answer) > 200:
-                preview += "..."
-            lines.append(f"- **Answer preview:** {preview}")
-            lines.append("")
+        )
+    return samples
 
-    # Errors summary
-    errors = [r for r in results if r.error]
-    if errors:
-        lines.append("## Errors\n")
-        for r in errors:
-            lines.append(f"- **{r.question_id}**: {r.error}")
-        lines.append("")
 
-    report_text = "\n".join(lines)
-    output_path.write_text(report_text, encoding="utf-8")
-    logger.info("Report written to %s", output_path)
+def run_ragas_metrics(samples: list, metrics: list, llm, embeddings):  # type: ignore[no-untyped-def]
+    """Thin wrapper around ragas.evaluate() — isolated for testability with fakes."""
+    from ragas import EvaluationDataset, evaluate
+    from ragas.run_config import RunConfig
+
+    if not samples:
+        return None
+
+    dataset = EvaluationDataset(samples=samples)
+    run_config = RunConfig(max_workers=JUDGE_MAX_WORKERS, timeout=JUDGE_TIMEOUT_SECONDS)
+
+    return evaluate(
+        dataset=dataset,
+        metrics=metrics,
+        llm=llm,
+        embeddings=embeddings,
+        run_config=run_config,
+    )
+
+
+def evaluate_with_ragas(rows: list[EvalRow]) -> dict:
+    """Score all rows with faithfulness/answer_relevancy, and the
+    reference-bearing subset with context_precision/context_recall."""
+    from ragas.metrics import answer_relevancy, context_precision, context_recall, faithfulness
+
+    llm, embeddings = build_judge()
+
+    full_samples = _rows_to_samples(rows, require_reference=False)
+    logger.info("Scoring faithfulness + answer_relevancy on %d questions...", len(full_samples))
+    full_result = run_ragas_metrics(full_samples, [faithfulness, answer_relevancy], llm, embeddings)
+
+    ref_samples = _rows_to_samples(rows, require_reference=True)
+    ref_result = None
+    if ref_samples:
+        logger.info(
+            "Scoring context_precision + context_recall on %d reference-bearing questions...",
+            len(ref_samples),
+        )
+        ref_result = run_ragas_metrics(
+            ref_samples, [context_precision, context_recall], llm, embeddings
+        )
+    else:
+        logger.warning("No reference-bearing questions — skipping context_precision/recall.")
+
+    return {"full": full_result, "reference_subset": ref_result}
+
+
+def _mean(values: list[float]) -> float:
+    values = [v for v in values if v is not None]
+    return sum(values) / len(values) if values else 0.0
+
+
+def generate_report(
+    rows: list[EvalRow],
+    ragas_results: dict,
+    results_dir: Path,
+) -> Path:
+    """Write per-question + aggregate RAGAS scores to a timestamped JSON file."""
+    results_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+
+    full_df = ragas_results["full"].to_pandas() if ragas_results["full"] is not None else None
+    ref_df = (
+        ragas_results["reference_subset"].to_pandas()
+        if ragas_results["reference_subset"] is not None
+        else None
+    )
+
+    per_question = []
+    for i, r in enumerate(rows):
+        entry = {
+            "id": r.question_id,
+            "category": r.category,
+            "question": r.question,
+            "intent_correct": r.intent_correct,
+            "is_verified": r.is_verified,
+            "latency_ms": round(r.latency_ms, 1),
+            "error": r.error,
+        }
+        if full_df is not None and i < len(full_df):
+            entry["faithfulness"] = float(full_df.iloc[i]["faithfulness"])
+            entry["answer_relevancy"] = float(full_df.iloc[i]["answer_relevancy"])
+        per_question.append(entry)
+
+    aggregate = {
+        "total_questions": len(rows),
+        "intent_accuracy": _mean([float(r.intent_correct) for r in rows]),
+        "groundedness_rate": _mean([float(r.is_verified) for r in rows]),
+        "avg_latency_ms": _mean([r.latency_ms for r in rows]),
+    }
+    if full_df is not None:
+        aggregate["faithfulness"] = _mean(full_df["faithfulness"].tolist())
+        aggregate["answer_relevancy"] = _mean(full_df["answer_relevancy"].tolist())
+    if ref_df is not None:
+        aggregate["context_precision"] = _mean(ref_df["context_precision"].tolist())
+        aggregate["context_recall"] = _mean(ref_df["context_recall"].tolist())
+        aggregate["reference_subset_size"] = len(ref_df)
+
+    report = {
+        "timestamp": timestamp,
+        "judge": "ollama (Gemma) — same model as generation, see self-bias caveat",
+        "aggregate": aggregate,
+        "per_question": per_question,
+    }
+
+    output_path = results_dir / f"ragas_{timestamp}.json"
+    output_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+    logger.info("RAGAS results written to %s", output_path)
+    return output_path
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run evaluation harness")
+    parser = argparse.ArgumentParser(description="Run RAGAS evaluation harness")
     parser.add_argument("--questions", type=Path, default=DEFAULT_QUESTIONS)
-    parser.add_argument("--report", type=Path, default=DEFAULT_REPORT)
+    parser.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     parser.add_argument("--index-dir", type=Path, default=DEFAULT_INDEX_DIR)
     parser.add_argument("--db-path", type=Path, default=DEFAULT_DB_PATH)
     parser.add_argument("--kg-path", type=Path, default=DEFAULT_KG_PATH)
@@ -307,29 +336,27 @@ def main() -> None:
     questions = _load_questions(args.questions)
     logger.info("Loaded %d evaluation questions.", len(questions))
 
-    results = evaluate_questions(
-        questions,
-        index_dir=args.index_dir,
-        db_path=args.db_path,
-        kg_path=args.kg_path,
-    )
+    rows = collect_eval_rows(questions, args.index_dir, args.db_path, args.kg_path)
 
-    metrics = compute_metrics(results)
-    generate_report(metrics, results, args.report)
+    # Checkpoint raw Q&A/contexts before the slow RAGAS scoring phase — if
+    # that phase gets interrupted (e.g. the allocation expires), we still
+    # have the generation results instead of losing everything.
+    args.results_dir.mkdir(parents=True, exist_ok=True)
+    checkpoint_path = args.results_dir / "_checkpoint_rows.json"
+    checkpoint_path.write_text(json.dumps([vars(r) for r in rows], indent=2), encoding="utf-8")
+    logger.info("Checkpointed %d rows to %s before RAGAS scoring.", len(rows), checkpoint_path)
 
-    # Print summary
+    ragas_results = evaluate_with_ragas(rows)
+    output_path = generate_report(rows, ragas_results, args.results_dir)
+
+    aggregate = json.loads(output_path.read_text())["aggregate"]
     print(f"\n{'='*60}")
-    print("EVALUATION SUMMARY")
+    print("RAGAS EVALUATION SUMMARY")
     print(f"{'='*60}")
-    print(f"  Questions:          {metrics.total_questions}")
-    print(f"  Intent Accuracy:    {metrics.intent_accuracy:.1%}")
-    print(f"  Answer Rate:        {metrics.answer_rate:.1%}")
-    print(f"  Keyword Recall:     {metrics.avg_keyword_recall:.1%}")
-    print(f"  Groundedness:       {metrics.groundedness_rate:.1%}")
-    print(f"  SQL Success:        {metrics.sql_success_rate:.1%}")
-    print(f"  Avg Latency:        {metrics.avg_latency_ms:.0f} ms")
+    for key, value in aggregate.items():
+        print(f"  {key}: {value}")
     print(f"{'='*60}")
-    print(f"  Report: {args.report}")
+    print(f"  Results: {output_path}")
 
 
 if __name__ == "__main__":

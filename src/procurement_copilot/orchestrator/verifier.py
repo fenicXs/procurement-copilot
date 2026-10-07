@@ -8,6 +8,10 @@ When no LLM is available it uses simple heuristic overlap checks.
 import logging
 import re
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 logger = logging.getLogger(__name__)
 
@@ -29,9 +33,7 @@ def _extract_sentences(text: str) -> list[str]:
     return [s.strip() for s in sentences if len(s.strip()) > 10]
 
 
-def _sentence_has_evidence(
-    sentence: str, evidence_text: str, threshold: float = 0.4
-) -> bool:
+def _sentence_has_evidence(sentence: str, evidence_text: str, threshold: float = 0.4) -> bool:
     """Check if a sentence is supported by evidence via keyword overlap.
 
     A sentence is considered grounded if at least *threshold* fraction of its
@@ -86,6 +88,67 @@ def _sentence_has_evidence(
     return ratio >= threshold
 
 
+def _get_llm():  # type: ignore[no-untyped-def]
+    from procurement_copilot.llm import get_llm
+
+    return get_llm()
+
+
+VERIFY_SYSTEM_PROMPT = """You are checking whether an answer about federal procurement \
+policy (FAR) is fully supported by the provided evidence.
+
+Respond in exactly this format, two lines:
+GROUNDED: yes|no
+UNSUPPORTED: <comma-separated unsupported claim sentences, or NONE>
+"""
+
+
+def _verify_answer_llm(
+    answer: str,
+    evidence_texts: list[str],
+    llm: "BaseChatModel",
+    abstain_on_failure: bool = True,
+) -> VerificationResult:
+    """LLM-as-judge groundedness check — more accurate than keyword overlap,
+    but requires a configured LLM provider."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    evidence_block = "\n".join(evidence_texts)[:4000]  # keep prompt bounded
+    messages = [
+        SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+        HumanMessage(content=f"Evidence:\n{evidence_block}\n\nAnswer:\n{answer}"),
+    ]
+    response = llm.invoke(messages)
+    content = response.content if isinstance(response.content, str) else str(response.content)
+
+    is_grounded = bool(re.search(r"GROUNDED:\s*yes", content, re.IGNORECASE))
+    unsupported_match = re.search(r"UNSUPPORTED:\s*(.*)", content, re.IGNORECASE)
+    unsupported_raw = unsupported_match.group(1).strip() if unsupported_match else ""
+    unsupported = (
+        []
+        if not unsupported_raw or unsupported_raw.upper().startswith("NONE")
+        else [c.strip() for c in unsupported_raw.split(",") if c.strip()]
+    )
+
+    if is_grounded:
+        verified_answer = answer
+    elif abstain_on_failure:
+        verified_answer = (
+            "I cannot provide a verified answer to this question. "
+            "The available evidence does not sufficiently support a response."
+        )
+    else:
+        verified_answer = answer
+
+    return VerificationResult(
+        is_grounded=is_grounded,
+        original_answer=answer,
+        verified_answer=verified_answer,
+        unsupported_claims=unsupported,
+        evidence_summary=f"LLM-judged against {len(evidence_texts)} evidence sources.",
+    )
+
+
 def verify_answer(
     answer: str,
     evidence_texts: list[str],
@@ -93,6 +156,9 @@ def verify_answer(
     threshold: float = 0.4,
 ) -> VerificationResult:
     """Verify that claims in an answer are supported by provided evidence.
+
+    Uses an LLM-as-judge when a provider is configured (more accurate than
+    keyword overlap); falls back to the keyword-overlap heuristic offline.
 
     Args:
         answer: The generated answer text.
@@ -111,6 +177,12 @@ def verify_answer(
             verified_answer=answer or "No answer was generated.",
             unsupported_claims=[],
             evidence_summary="No evidence provided.",
+        )
+
+    llm = _get_llm()
+    if llm is not None:
+        return _verify_answer_llm(
+            answer, evidence_texts, llm, abstain_on_failure=abstain_on_failure
         )
 
     combined_evidence = "\n".join(evidence_texts)

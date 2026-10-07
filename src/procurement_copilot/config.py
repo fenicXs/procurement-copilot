@@ -19,6 +19,35 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     BYTEZ_API_KEY: str = ""
 
+    # --- Explicit provider override: "openai"|"anthropic"|"bytez"|"ollama". ---
+    # Empty = auto fallback chain.
+    LLM_PROVIDER: str = ""
+
+    # --- Ollama (local, free) ---
+    OLLAMA_BASE_URL: str = "http://localhost:11434"
+    OLLAMA_MODEL: str = "gemma4:31b-it-bf16"
+    OLLAMA_EMBED_MODEL: str = "nomic-embed-text"
+    # Ollama defaults num_ctx to the model's full max context (262144 for
+    # gemma4:31b) when unset, which needs ~111GB KV-cache+compute-graph memory
+    # and runs right at the edge of an 80GB GPU. Our RAG prompts are a few
+    # ~1000-char chunks + a query — cap it well below that ceiling.
+    OLLAMA_NUM_CTX: int = 8192
+
+    # --- LangFuse (observability — Cloud free tier) ---
+    LANGFUSE_PUBLIC_KEY: str = ""
+    LANGFUSE_SECRET_KEY: str = ""
+    LANGFUSE_HOST: str = "https://cloud.langfuse.com"
+
+    # --- Vector retrieval (Qdrant local-mode hybrid dense+sparse) ---
+    QDRANT_COLLECTION: str = "far_chunks"
+    SPARSE_MODEL: str = "Qdrant/bm25"
+    RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+
+    # --- Evaluation (RAGAS) ---
+    # Forces the local, free judge regardless of which provider answers
+    # queries, so eval cost stays zero even if a cloud key is configured.
+    EVAL_JUDGE_PROVIDER: str = "ollama"
+
     # --- Paths ---
     DATA_DIR: Path = _PROJECT_ROOT / "data"
     DB_PATH: Path = _PROJECT_ROOT / "data" / "processed" / "procurement.duckdb"

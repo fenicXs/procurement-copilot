@@ -15,13 +15,22 @@ dependencies = [
     "langchain-anthropic>=0.3,<0.4",
     "langchain-community>=0.3,<0.4",
     "duckdb>=1.0,<2",
-    "faiss-cpu>=1.8,<2",
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.32,<1",
     "pydantic-settings>=2.6,<3",
     "httpx>=0.27,<1",
     "pypdf>=5.0,<6",
     "bytez>=1,<2",
+    "langchain-ollama>=0.2,<0.3",
+    "langfuse>=4,<5",
+    "qdrant-client>=1.11,<2",
+    "fastembed>=0.4,<1",
+    "sentence-transformers>=3,<4",
+    # Pinned to the 0.2.x line deliberately: ragas>=0.3 pulls datasets>=4.0,
+    # which requires huggingface-hub>=1.0 — incompatible with the
+    # huggingface-hub<1.0 ceiling that transformers/sentence-transformers
+    # (our Day-3 reranker) and fastembed both need. 0.2.x avoids the conflict.
+    "ragas>=0.2,<0.3",
 ]
 
 [project.optional-dependencies]
@@ -38,7 +47,7 @@ packages = ["src/procurement_copilot"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-pythonpath = ["src"]
+pythonpath = ["src", "."]
 
 [tool.ruff]
 target-version = "py311"

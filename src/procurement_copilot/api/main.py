@@ -1,5 +1,6 @@
 """FastAPI application entry-point."""
 
+import uuid
 from dataclasses import asdict
 
 from fastapi import FastAPI, HTTPException
@@ -46,6 +47,7 @@ async def query(req: QueryRequest) -> QueryResponse:
             index_dir=settings.VECTOR_INDEX_DIR,
             db_path=settings.DB_PATH,
             kg_path=settings.KG_PATH,
+            session_id=str(uuid.uuid4()),
         )
         return QueryResponse(**asdict(result))
     except Exception as exc:

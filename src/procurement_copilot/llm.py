@@ -1,12 +1,14 @@
 """LLM provider utilities — shared across RAG, Graph, and SQL answer modules.
 
-Fallback chain: OpenAI → Anthropic → Bytez → None.
+Fallback chain: OpenAI → Anthropic → Bytez → Ollama → None.
+Set LLM_PROVIDER to force a specific provider regardless of which keys are present.
 """
 
 import logging
 import os
 from typing import Any
 
+from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
@@ -36,6 +38,7 @@ class ChatBytez(BaseChatModel):
         self,
         messages: list[BaseMessage],
         stop: list[str] | None = None,
+        run_manager: CallbackManagerForLLMRun | None = None,
         **kwargs: Any,
     ) -> Any:
         from bytez import Bytez
@@ -69,25 +72,47 @@ class ChatBytez(BaseChatModel):
         return ChatResult(generations=[ChatGeneration(message=AIMessage(content=content))])
 
 
+def _ollama_chat() -> BaseChatModel:
+    from langchain_ollama import ChatOllama
+
+    logger.info("Using Ollama LLM provider (%s).", settings.OLLAMA_MODEL)
+    return ChatOllama(
+        base_url=settings.OLLAMA_BASE_URL,
+        model=settings.OLLAMA_MODEL,
+        temperature=0,
+        num_ctx=settings.OLLAMA_NUM_CTX,
+    )
+
+
 def get_llm() -> BaseChatModel | None:
     """Get the best available chat model.
 
     Fallback chain: OpenAI → Anthropic → Bytez → None.
+    Set LLM_PROVIDER ("openai"|"anthropic"|"bytez"|"ollama") to force a specific
+    provider — this is the only way to opt into Ollama, since it has no API key
+    to auto-detect and must not be silently picked up by offline/CI test runs.
     """
-    if _get_key("OPENAI_API_KEY"):
+    provider = (_get_key("LLM_PROVIDER") or settings.LLM_PROVIDER).lower()
+
+    if provider == "ollama":
+        return _ollama_chat()
+
+    if provider in ("", "openai") and _get_key("OPENAI_API_KEY"):
         from langchain_openai import ChatOpenAI
 
         logger.info("Using OpenAI LLM provider.")
         return ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-    if _get_key("ANTHROPIC_API_KEY"):
+    if provider in ("", "anthropic") and _get_key("ANTHROPIC_API_KEY"):
         from langchain_anthropic import ChatAnthropic
 
         logger.info("Using Anthropic LLM provider.")
-        return ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0)
+        # `model` is accepted at runtime via a pydantic alias for `model_name`;
+        # installed langchain-anthropic's stubs don't reflect that alias.
+        return ChatAnthropic(model="claude-sonnet-4-20250514", temperature=0)  # type: ignore[call-arg]
 
     bytez_key = _get_key("BYTEZ_API_KEY")
-    if bytez_key:
+    if provider in ("", "bytez") and bytez_key:
         logger.info("Using Bytez LLM provider.")
         return ChatBytez(
             api_key=bytez_key,
@@ -158,23 +183,36 @@ class BytezEmbeddings(Embeddings):
                     time.sleep(2 * (attempt + 1))
                     continue
                 raise RuntimeError(f"Bytez embedding error: {result.error}")
-            return result.output
+            return result.output  # type: ignore[no-any-return]  # Bytez SDK result is untyped
         raise RuntimeError("Bytez rate limit exceeded after retries")
+
+
+def _ollama_embeddings() -> Embeddings:
+    from langchain_ollama import OllamaEmbeddings
+
+    logger.info("Using Ollama embeddings (%s).", settings.OLLAMA_EMBED_MODEL)
+    return OllamaEmbeddings(base_url=settings.OLLAMA_BASE_URL, model=settings.OLLAMA_EMBED_MODEL)
 
 
 def get_embeddings() -> Embeddings:
     """Get the best available embedding model.
 
     Fallback chain: OpenAI → Bytez → FakeEmbeddings.
+    Set LLM_PROVIDER="ollama" to opt into local Ollama embeddings instead.
     """
-    if _get_key("OPENAI_API_KEY"):
+    provider = (_get_key("LLM_PROVIDER") or settings.LLM_PROVIDER).lower()
+
+    if provider == "ollama":
+        return _ollama_embeddings()
+
+    if provider in ("", "openai") and _get_key("OPENAI_API_KEY"):
         from langchain_openai import OpenAIEmbeddings
 
         logger.info("Using OpenAI embeddings.")
         return OpenAIEmbeddings(model="text-embedding-3-small")
 
     bytez_key = _get_key("BYTEZ_API_KEY")
-    if bytez_key:
+    if provider in ("", "bytez") and bytez_key:
         logger.info("Using Bytez embeddings.")
         return BytezEmbeddings(api_key=bytez_key)
 

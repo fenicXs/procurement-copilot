@@ -1,4 +1,4 @@
-.PHONY: setup lint test data build api eval
+.PHONY: setup lint test data build api eval eval-legacy
 
 setup:
 	pip install -e ".[dev]"
@@ -18,7 +18,7 @@ data:
 build:
 	python scripts/build_duckdb.py
 	python scripts/chunk_far.py
-	python scripts/build_vector_index.py
+	python scripts/build_qdrant_index.py
 	python scripts/build_kg.py
 
 api:
@@ -26,3 +26,6 @@ api:
 
 eval:
 	python scripts/run_eval.py
+
+eval-legacy:
+	python scripts/run_eval_legacy.py

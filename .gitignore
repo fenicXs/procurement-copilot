@@ -24,8 +24,10 @@ env/
 data/raw/
 data/processed/
 
-# Eval outputs (generated)
+# Eval outputs (generated) — keep the comparison report, ignore raw per-run dumps
 eval/report.md
+eval/report_legacy.md
+eval/results/*.json
 
 # OS
 .DS_Store

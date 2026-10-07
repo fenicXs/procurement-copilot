@@ -10,9 +10,12 @@ This is the central coordination layer that:
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, TypedDict
+from typing import TYPE_CHECKING, Any, TypedDict
 
 from langgraph.graph import END, StateGraph
+
+if TYPE_CHECKING:
+    from langchain_core.language_models.chat_models import BaseChatModel
 
 from procurement_copilot.orchestrator.intent import (
     INTENT_GRAPH,
@@ -76,15 +79,13 @@ def rag_answer_node(
     state: OrchestratorState,
     index_dir: Path | None = None,
 ) -> dict[str, Any]:
-    """Retrieve FAR chunks and generate a RAG answer."""
-    from procurement_copilot.rag.answer import generate_rag_answer
-    from procurement_copilot.rag.retriever import retrieve
+    """Run the Corrective-RAG pipeline (retrieve -> grade -> rewrite/retry -> generate)."""
+    from procurement_copilot.rag.answer import generate_rag_answer_with_retrieval
 
     question = state["question"]
 
     try:
-        chunks = retrieve(question, top_k=5, index_dir=index_dir)
-        result = generate_rag_answer(question, chunks)
+        result = generate_rag_answer_with_retrieval(question, top_k=5, index_dir=index_dir)
         return {
             "rag_answer": result.answer,
             "rag_citations": [
@@ -96,7 +97,7 @@ def rag_answer_node(
                 }
                 for c in result.citations
             ],
-            "rag_chunks": [c.text for c in chunks],
+            "rag_chunks": [c.text for c in result.retrieved_chunks],
         }
     except Exception as exc:
         logger.exception("RAG node failed")
@@ -156,6 +157,25 @@ def graph_answer_node(
         return {"graph_answer": "", "error": f"Graph error: {exc}"}
 
 
+def _collect_evidence(state: OrchestratorState) -> tuple[list[str], bool]:
+    """Gather all evidence text (RAG chunks, SQL rows, graph triples) the
+    pipeline produced. Shared by verifier_node (groundedness checking) and
+    run_query (exposing contexts for external eval, e.g. RAGAS)."""
+    evidence: list[str] = []
+    evidence.extend(state.get("rag_chunks", []))
+    if state.get("sql_rows"):
+        cols = state.get("sql_columns", [])
+        for row in state["sql_rows"][:10]:
+            evidence.append(" | ".join(f"{c}: {v}" for c, v in zip(cols, row)))
+    has_graph_evidence = False
+    for triple in state.get("graph_triples", []):
+        has_graph_evidence = True
+        # Include both the arrow notation and plain text for better keyword matching
+        evidence.append(f"{triple['subject']} --[{triple['relation']}]--> {triple['object']}")
+        evidence.append(f"{triple['subject']} {triple['relation']} {triple['object']}")
+    return evidence, has_graph_evidence
+
+
 def verifier_node(state: OrchestratorState) -> dict[str, Any]:
     """Verify the combined answer against available evidence.
 
@@ -172,19 +192,7 @@ def verifier_node(state: OrchestratorState) -> dict[str, Any]:
             "verification_notes": "SQL result from database — auto-verified.",
         }
 
-    # Collect all evidence
-    evidence: list[str] = []
-    evidence.extend(state.get("rag_chunks", []))
-    if state.get("sql_rows"):
-        cols = state.get("sql_columns", [])
-        for row in state["sql_rows"][:10]:
-            evidence.append(" | ".join(f"{c}: {v}" for c, v in zip(cols, row)))
-    has_graph_evidence = False
-    for triple in state.get("graph_triples", []):
-        has_graph_evidence = True
-        # Include both the arrow notation and plain text for better keyword matching
-        evidence.append(f"{triple['subject']} --[{triple['relation']}]--> {triple['object']}")
-        evidence.append(f"{triple['subject']} {triple['relation']} {triple['object']}")
+    evidence, has_graph_evidence = _collect_evidence(state)
 
     # Combine answers
     answers = []
@@ -216,7 +224,11 @@ def verifier_node(state: OrchestratorState) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# NL-to-SQL helper (simple keyword-based; upgradeable to LLM)
+# NL-to-SQL helper — LLM-based with a regex-template offline fallback.
+# LLM-generated SQL is never executed directly: it still passes through the
+# unchanged safe_sql.py validator (SELECT-only, table allowlist, blocked
+# keywords, LIMIT enforcement) downstream in sql_answer_node, same as the
+# template path.
 # ---------------------------------------------------------------------------
 
 _SQL_TEMPLATES: list[tuple[str, str]] = [
@@ -285,12 +297,10 @@ _SQL_TEMPLATES: list[tuple[str, str]] = [
 ]
 
 
-def _nl_to_sql(question: str, schema: dict[str, list[dict]]) -> str:
-    """Convert a natural language question to SQL using templates.
+def _nl_to_sql_template(question: str) -> str:
+    """Convert a natural language question to SQL using regex templates.
 
-    Falls back to a basic SELECT if no template matches. This is a
-    simple heuristic approach; with an LLM available it would use
-    few-shot prompting against the schema.
+    Falls back to a basic SELECT if no template matches.
     """
     import re as _re
 
@@ -308,15 +318,85 @@ def _nl_to_sql(question: str, schema: dict[str, list[dict]]) -> str:
     return "SELECT * FROM awards LIMIT 10"
 
 
-def _summarize_sql_result(
-    question: str,
-    columns: list[str],
-    rows: list[tuple],
-) -> str:
-    """Produce a human-readable summary of SQL results."""
-    if not rows:
-        return "The query returned no results."
+SQL_SYSTEM_PROMPT_TEMPLATE = """You write a single DuckDB SELECT query against a table \
+named `awards` with this schema:
 
+{schema}
+
+Rules:
+- Output ONLY one SELECT statement — never DROP/DELETE/UPDATE/INSERT/ALTER or any other
+  write/DDL statement.
+- Only reference the `awards` table.
+- Respond with ONLY the raw SQL query. No markdown code fences, no explanation.
+
+Examples:
+Q: What are the top 5 recipients by total award amount?
+A: SELECT recipient_name, SUM(award_amount) AS total FROM awards
+   GROUP BY recipient_name ORDER BY total DESC LIMIT 5
+
+Q: How many awards did the Department of Defense receive?
+A: SELECT COUNT(*) AS award_count FROM awards WHERE awarding_agency = 'Department of Defense'
+
+Note: `awarding_agency` is the government agency that made the award (e.g. "Department
+of Defense"). `recipient_name` is the contractor/company that received it. Do not
+confuse the two — a government agency name belongs in `awarding_agency`, never
+`recipient_name`.
+"""
+
+
+def _format_schema_for_prompt(schema: dict[str, list[dict]]) -> str:
+    lines = []
+    for table, cols in schema.items():
+        col_strs = ", ".join(f"{c['name']} ({c['type']})" for c in cols)
+        lines.append(f"{table}: {col_strs}")
+    return "\n".join(lines)
+
+
+def _nl_to_sql_llm(
+    question: str, schema: dict[str, list[dict]], llm: "BaseChatModel"
+) -> str | None:
+    """LLM-generated SQL. Returns None (caller falls back to templates) if
+    the response doesn't look like a SELECT statement."""
+    import re as _re
+
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    system_prompt = SQL_SYSTEM_PROMPT_TEMPLATE.format(schema=_format_schema_for_prompt(schema))
+    messages = [
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=f"Q: {question}\nA:"),
+    ]
+    response = llm.invoke(messages)
+    content = response.content if isinstance(response.content, str) else str(response.content)
+
+    sql = _re.sub(r"^```(?:sql)?\s*|\s*```$", "", content.strip(), flags=_re.IGNORECASE).strip()
+    if not sql.upper().startswith("SELECT"):
+        return None
+    return sql
+
+
+def _nl_to_sql(question: str, schema: dict[str, list[dict]]) -> str:
+    """Convert a natural language question to SQL.
+
+    Uses an LLM when a provider is configured (falls back to regex
+    templates if the response is unusable); uses the templates directly
+    offline. Either way, the result still passes through safe_sql.py
+    unchanged before execution.
+    """
+    from procurement_copilot.llm import get_llm
+
+    llm = get_llm()
+    if llm is not None:
+        sql = _nl_to_sql_llm(question, schema, llm)
+        if sql:
+            return sql
+        logger.warning("LLM NL-to-SQL unusable — falling back to templates.")
+
+    return _nl_to_sql_template(question)
+
+
+def _summarize_sql_result_template(columns: list[str], rows: list[tuple]) -> str:
+    """Produce a plain stringified summary of SQL results."""
     lines = [f"Query returned {len(rows)} row(s). Columns: {', '.join(columns)}\n"]
     for row in rows[:10]:
         parts = [f"{col}: {val}" for col, val in zip(columns, row)]
@@ -326,6 +406,59 @@ def _summarize_sql_result(
         lines.append(f"  ... and {len(rows) - 10} more rows.")
 
     return "\n".join(lines)
+
+
+def _summarize_sql_result_llm(
+    question: str,
+    columns: list[str],
+    rows: list[tuple],
+    llm: "BaseChatModel",
+) -> str | None:
+    """LLM narration of SQL results. Returns None on an empty response."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    preview_rows = rows[:20]
+    table_text = "\n".join(
+        " | ".join(f"{c}: {v}" for c, v in zip(columns, row)) for row in preview_rows
+    )
+    messages = [
+        SystemMessage(
+            content=(
+                "Summarize this SQL query result in 1-3 concise sentences, in plain "
+                "English, for a procurement analyst. Mention actual numbers/names from "
+                "the data. Do not invent values not present in the result."
+            )
+        ),
+        HumanMessage(content=f"Question: {question}\n\nResult ({len(rows)} rows):\n{table_text}"),
+    ]
+    response = llm.invoke(messages)
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    return content.strip() or None
+
+
+def _summarize_sql_result(
+    question: str,
+    columns: list[str],
+    rows: list[tuple],
+) -> str:
+    """Produce a human-readable summary of SQL results.
+
+    Uses an LLM to narrate the results in plain English when a provider is
+    configured; falls back to a stringified table offline.
+    """
+    if not rows:
+        return "The query returned no results."
+
+    from procurement_copilot.llm import get_llm
+
+    llm = get_llm()
+    if llm is not None:
+        summary = _summarize_sql_result_llm(question, columns, rows, llm)
+        if summary:
+            return summary
+        logger.warning("LLM SQL summary empty — falling back to stringified table.")
+
+    return _summarize_sql_result_template(columns, rows)
 
 
 # ---------------------------------------------------------------------------
@@ -401,22 +534,15 @@ def build_graph(
                     "Merge them into ONE concise, well-structured answer (under 300 words). "
                     "Preserve all citations [chunk_id] and data values. Remove redundancy."
                 )
-                combined_input = (
-                    f"Question: {question}\n\n"
-                    + "\n\n---\n\n".join(
-                        f"Answer {i+1}:\n{p}" for i, p in enumerate(parts)
-                    )
+                combined_input = f"Question: {question}\n\n" + "\n\n---\n\n".join(
+                    f"Answer {i+1}:\n{p}" for i, p in enumerate(parts)
                 )
                 msgs = [
                     SystemMessage(content=combine_prompt),
                     HumanMessage(content=combined_input),
                 ]
                 resp = llm.invoke(msgs)
-                merged_text = (
-                    resp.content
-                    if isinstance(resp.content, str)
-                    else str(resp.content)
-                )
+                merged_text = resp.content if isinstance(resp.content, str) else str(resp.content)
                 # Store as both rag_answer and graph_answer so verifier sees it
                 merged["rag_answer"] = merged_text
 
@@ -471,6 +597,7 @@ class CopilotResponse:
     citations: list[dict] = field(default_factory=list)
     sql_query: str = ""
     graph_triples: list[dict] = field(default_factory=list)
+    contexts: list[str] = field(default_factory=list)
     error: str | None = None
 
 
@@ -479,15 +606,34 @@ def run_query(
     index_dir: Path | None = None,
     db_path: Path | None = None,
     kg_path: Path | None = None,
+    session_id: str | None = None,
 ) -> CopilotResponse:
     """Run a question through the full orchestrator pipeline.
 
-    This is the main entry point for the copilot.
+    This is the main entry point for the copilot. LangFuse tracing is
+    attached per-call (not module-global) so concurrent requests don't bleed
+    into each other's traces; it's a no-op when LangFuse keys aren't set.
     """
+    from procurement_copilot.observability import flush_and_get_trace_url, get_langfuse_handler
+
     app = build_graph(index_dir=index_dir, db_path=db_path, kg_path=kg_path)
 
     initial_state: OrchestratorState = {"question": question}
-    final_state = app.invoke(initial_state)
+
+    handler = get_langfuse_handler(session_id=session_id)
+    config: dict[str, Any] | None = None
+    if handler is not None:
+        config = {"callbacks": [handler]}
+        if session_id:
+            config["metadata"] = {"langfuse_session_id": session_id}
+
+    final_state = app.invoke(initial_state, config=config)
+
+    if handler is not None:
+        trace_url = flush_and_get_trace_url(handler)
+        logger.info("LangFuse trace: %s", trace_url)
+
+    contexts, _ = _collect_evidence(final_state)
 
     return CopilotResponse(
         question=question,
@@ -497,5 +643,6 @@ def run_query(
         citations=final_state.get("rag_citations", []),
         sql_query=final_state.get("sql_query", ""),
         graph_triples=final_state.get("graph_triples", []),
+        contexts=contexts,
         error=final_state.get("error"),
     )
