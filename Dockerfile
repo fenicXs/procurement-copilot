@@ -10,6 +10,16 @@ COPY src/ src/
 # install moves the package into site-packages and breaks those paths).
 RUN pip install --no-cache-dir -e .
 
+# Bake the fastembed models (dense, BM25 sparse, reranker) into the image.
+# Downloading them lazily at runtime failed on Cloud Run ("Could not load
+# model ... from any source") and would also add a download to every cold start.
+ENV FASTEMBED_CACHE_PATH=/opt/fastembed_cache
+RUN python -c "from fastembed import TextEmbedding, SparseTextEmbedding; \
+from fastembed.rerank.cross_encoder import TextCrossEncoder; \
+TextEmbedding('BAAI/bge-small-en-v1.5'); \
+SparseTextEmbedding('Qdrant/bm25'); \
+TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')"
+
 COPY frontend/ frontend/
 COPY data/processed/far_chunks.jsonl data/processed/far_chunks.jsonl
 COPY data/processed/procurement.duckdb data/processed/procurement.duckdb
