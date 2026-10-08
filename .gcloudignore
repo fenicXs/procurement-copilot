@@ -1,0 +1,21 @@
+# gcloud's `--source` deploy defaults to .gitignore's rules for what to
+# exclude from the upload — but data/processed/ is gitignored wholesale
+# even though 4 specific files under it (far_chunks.jsonl, procurement.duckdb,
+# kg.parquet, vector_index_cloud/) are force-added and tracked in git, and
+# the Dockerfile COPYs them. This explicit file overrides that default so
+# those tracked files actually reach the build context.
+
+.git
+.github
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+tests/
+eval/
+logs/
+data/raw/

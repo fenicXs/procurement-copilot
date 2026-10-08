@@ -5,7 +5,10 @@ WORKDIR /app
 COPY pyproject.toml .
 COPY src/ src/
 
-RUN pip install --no-cache-dir .
+# Editable install on purpose: config.py and api/main.py resolve data/ and
+# frontend/ relative to __file__, which must stay under /app/src (a regular
+# install moves the package into site-packages and breaks those paths).
+RUN pip install --no-cache-dir -e .
 
 COPY frontend/ frontend/
 COPY data/processed/far_chunks.jsonl data/processed/far_chunks.jsonl
