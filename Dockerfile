@@ -18,7 +18,8 @@ RUN python -c "from fastembed import TextEmbedding, SparseTextEmbedding; \
 from fastembed.rerank.cross_encoder import TextCrossEncoder; \
 TextEmbedding('BAAI/bge-small-en-v1.5'); \
 SparseTextEmbedding('Qdrant/bm25'); \
-TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2')"
+TextCrossEncoder('Xenova/ms-marco-MiniLM-L-6-v2'); \
+TextCrossEncoder('BAAI/bge-reranker-v2-m3-int8')"
 
 COPY frontend/ frontend/
 COPY data/processed/far_chunks.jsonl data/processed/far_chunks.jsonl

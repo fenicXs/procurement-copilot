@@ -55,6 +55,12 @@ class Settings(BaseSettings):
     # torch/sentence-transformers (a huge dependency, the actual cause of an
     # OOM crash on a 512MB free-tier deploy) into the lightweight CPU path.
     FASTEMBED_RERANKER_MODEL: str = "Xenova/ms-marco-MiniLM-L-6-v2"
+    # Optional second rerank stage (fastembed path only): the small model above
+    # shortlists, then this stronger one re-scores just the shortlist. Fixes
+    # defining chunks (e.g. FAR 6.302-1) that MiniLM ranks below chunks that
+    # merely cite them. Empty string disables stage 2.
+    FASTEMBED_RERANKER2_MODEL: str = "BAAI/bge-reranker-v2-m3-int8"
+    RERANK_SHORTLIST: int = 25
 
     # --- Evaluation (RAGAS) ---
     # Forces the local, free judge regardless of which provider answers

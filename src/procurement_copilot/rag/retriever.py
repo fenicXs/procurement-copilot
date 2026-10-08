@@ -101,6 +101,45 @@ def _get_reranker() -> Any:
     return _reranker
 
 
+_UNSET: Any = object()
+_reranker2: Any = _UNSET
+
+
+def _get_reranker2() -> Any:
+    """Stage-2 reranker, or None when disabled / not on the fastembed path /
+    the model can't be loaded (loading is attempted once, then cached)."""
+    global _reranker2
+    if _reranker2 is _UNSET:
+        _reranker2 = None
+        if settings.FASTEMBED_RERANKER2_MODEL and _resolve_embedding_provider() == "fastembed":
+            try:
+                _reranker2 = _FastEmbedRerankerAdapter(settings.FASTEMBED_RERANKER2_MODEL)
+            except Exception:
+                logger.warning("Stage-2 reranker unavailable — using stage 1 only.", exc_info=True)
+    return _reranker2
+
+
+def _rerank_stage2(query: str, ranked: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Re-score the top `RERANK_SHORTLIST` of an already-reranked list with the
+    stronger model; the tail keeps its stage-1 order. No-op if unavailable."""
+    reranker = _get_reranker2()
+    shortlist = max(settings.RERANK_SHORTLIST, 0)
+    if reranker is None or shortlist == 0 or not ranked:
+        return ranked
+
+    head, tail = ranked[:shortlist], ranked[shortlist:]
+    try:
+        scores = reranker.predict([(query, c.text) for c in head])
+    except Exception:
+        logger.warning("Stage-2 rerank failed — keeping stage-1 order.", exc_info=True)
+        return ranked
+
+    for chunk, score in zip(head, scores):
+        chunk.score = float(score)
+    head.sort(key=lambda c: c.score, reverse=True)
+    return head + tail
+
+
 _qdrant_clients: dict[str, Any] = {}
 
 
@@ -204,5 +243,5 @@ def retrieve(
             )
         )
 
-    reranked = _rerank(query, candidates)
+    reranked = _rerank_stage2(query, _rerank(query, candidates))
     return reranked[:top_k]

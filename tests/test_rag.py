@@ -116,6 +116,50 @@ class TestRerank:
         assert not called
 
 
+class TestRerankStage2:
+    def _chunks(self) -> list[RetrievedChunk]:
+        # stage-1 order: a, b, c, d (scores descending)
+        return [_make_chunk(i, f"text-{i}") for i in "abcd"]
+
+    def test_rescores_only_the_shortlist_and_keeps_tail(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        stub = _StubReranker({"text-a": 0.1, "text-b": 0.9, "text-c": 0.5})
+        monkeypatch.setattr(retriever, "_get_reranker2", lambda: stub)
+        monkeypatch.setattr(retriever.settings, "RERANK_SHORTLIST", 3)
+
+        out = retriever._rerank_stage2("q", self._chunks())
+
+        assert [c.chunk_id for c in out] == ["b", "c", "a", "d"]  # d never scored
+
+    def test_noop_when_stage2_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.rag import retriever
+
+        monkeypatch.setattr(retriever, "_get_reranker2", lambda: None)
+        chunks = self._chunks()
+        assert retriever._rerank_stage2("q", chunks) == chunks
+
+    def test_falls_back_to_stage1_order_on_error(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.rag import retriever
+
+        class _Boom:
+            def predict(self, pairs):  # type: ignore[no-untyped-def]
+                raise RuntimeError("onnx failure")
+
+        monkeypatch.setattr(retriever, "_get_reranker2", lambda: _Boom())
+        chunks = self._chunks()
+        assert [c.chunk_id for c in retriever._rerank_stage2("q", chunks)] == list("abcd")
+
+    def test_disabled_off_the_fastembed_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.rag import retriever
+
+        monkeypatch.setattr(retriever, "_reranker2", retriever._UNSET)
+        # conftest clears EMBEDDING_PROVIDER/LLM_PROVIDER, so this is not fastembed
+        assert retriever._get_reranker2() is None
+
+
 # --- Integration test for retrieval with a temp Qdrant index ---
 
 
