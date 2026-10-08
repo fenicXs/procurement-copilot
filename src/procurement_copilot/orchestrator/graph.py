@@ -24,6 +24,7 @@ from procurement_copilot.orchestrator.intent import (
     classify_intent,
 )
 from procurement_copilot.orchestrator.verifier import verify_answer
+from procurement_copilot.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -319,30 +320,7 @@ def _nl_to_sql_template(question: str) -> str:
     return "SELECT * FROM awards LIMIT 10"
 
 
-SQL_SYSTEM_PROMPT_TEMPLATE = """You write a single DuckDB SELECT query against a table \
-named `awards` with this schema:
-
-{schema}
-
-Rules:
-- Output ONLY one SELECT statement — never DROP/DELETE/UPDATE/INSERT/ALTER or any other
-  write/DDL statement.
-- Only reference the `awards` table.
-- Respond with ONLY the raw SQL query. No markdown code fences, no explanation.
-
-Examples:
-Q: What are the top 5 recipients by total award amount?
-A: SELECT recipient_name, SUM(award_amount) AS total FROM awards
-   GROUP BY recipient_name ORDER BY total DESC LIMIT 5
-
-Q: How many awards did the Department of Defense receive?
-A: SELECT COUNT(*) AS award_count FROM awards WHERE awarding_agency = 'Department of Defense'
-
-Note: `awarding_agency` is the government agency that made the award (e.g. "Department
-of Defense"). `recipient_name` is the contractor/company that received it. Do not
-confuse the two — a government agency name belongs in `awarding_agency`, never
-`recipient_name`.
-"""
+SQL_SYSTEM_PROMPT_TEMPLATE = load_prompt("sql_generate")
 
 
 def _format_schema_for_prompt(schema: dict[str, list[dict]]) -> str:
@@ -423,13 +401,7 @@ def _summarize_sql_result_llm(
         " | ".join(f"{c}: {v}" for c, v in zip(columns, row)) for row in preview_rows
     )
     messages = [
-        SystemMessage(
-            content=(
-                "Summarize this SQL query result in 1-3 concise sentences, in plain "
-                "English, for a procurement analyst. Mention actual numbers/names from "
-                "the data. Do not invent values not present in the result."
-            )
-        ),
+        SystemMessage(content=load_prompt("sql_summarize")),
         HumanMessage(content=f"Question: {question}\n\nResult ({len(rows)} rows):\n{table_text}"),
     ]
     response = llm.invoke(messages)
@@ -530,11 +502,7 @@ def build_graph(
             if llm is not None:
                 from langchain_core.messages import HumanMessage, SystemMessage
 
-                combine_prompt = (
-                    "You are given multiple answers to a single procurement question. "
-                    "Merge them into ONE concise, well-structured answer (under 300 words). "
-                    "Preserve all citations [chunk_id] and data values. Remove redundancy."
-                )
+                combine_prompt = load_prompt("merge_answers")
                 combined_input = f"Question: {question}\n\n" + "\n\n---\n\n".join(
                     f"Answer {i+1}:\n{p}" for i, p in enumerate(parts)
                 )

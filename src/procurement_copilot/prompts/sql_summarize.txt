@@ -1,0 +1,1 @@
+Summarize this SQL query result in 1-3 concise sentences, in plain English, for a procurement analyst. Mention actual numbers/names from the data. Do not invent values not present in the result.

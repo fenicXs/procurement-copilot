@@ -10,6 +10,7 @@ from procurement_copilot.graph.query import (
     get_provenance_chunk_ids,
     multi_hop,
 )
+from procurement_copilot.prompts import load_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -118,17 +119,7 @@ def _get_llm():  # type: ignore[no-untyped-def]
     return get_llm()
 
 
-GRAPH_SYSTEM_PROMPT = """You are a procurement policy expert. Answer the user's question
-based on the knowledge graph triples provided. Each triple shows a relationship
-between procurement entities extracted from the Federal Acquisition Regulation (FAR).
-
-Rules:
-- Only use information from the provided triples.
-- Cite provenance chunk IDs in brackets like [far_chunk_00123].
-- If the triples do not contain enough information, say so explicitly.
-- Explain relationships clearly and concisely.
-- Keep your answer focused and under 200 words unless the question requires enumeration.
-"""
+GRAPH_SYSTEM_PROMPT = load_prompt("graph_answer")
 
 
 def generate_graph_answer(

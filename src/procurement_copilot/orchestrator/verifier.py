@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
+from procurement_copilot.prompts import load_prompt
+
 logger = logging.getLogger(__name__)
 
 
@@ -94,13 +96,36 @@ def _get_llm():  # type: ignore[no-untyped-def]
     return get_llm()
 
 
-VERIFY_SYSTEM_PROMPT = """You are checking whether an answer about federal procurement \
-policy (FAR) is fully supported by the provided evidence.
+VERIFY_SYSTEM_PROMPT = load_prompt("verify")
 
-Respond in exactly this format, two lines:
-GROUNDED: yes|no
-UNSUPPORTED: <comma-separated unsupported claim sentences, or NONE>
-"""
+
+# Five ~1000-char chunks plus SQL/graph evidence fit comfortably; the old 4000-char
+# cap silently cut off the last chunk or two, which could hold the cited fact.
+MAX_EVIDENCE_CHARS = 12000
+LLM_VERIFY_ATTEMPTS = 2
+
+_GROUNDED_RE = re.compile(r"GROUNDED:\s*(yes|no)", re.IGNORECASE)
+
+
+def _judge_once(answer: str, evidence_block: str, llm: "BaseChatModel") -> tuple[bool | None, str]:
+    """One judge call. Returns (verdict, raw_reply); verdict is None when the
+    call failed or the reply had no parseable `GROUNDED: yes|no` line."""
+    from langchain_core.messages import HumanMessage, SystemMessage
+
+    messages = [
+        SystemMessage(content=VERIFY_SYSTEM_PROMPT),
+        HumanMessage(content=f"Evidence:\n{evidence_block}\n\nAnswer:\n{answer}"),
+    ]
+    try:
+        response = llm.invoke(messages)
+    except Exception as exc:  # e.g. a provider 429/5xx — must not read as "ungrounded"
+        logger.warning("Verifier LLM call failed: %s", exc)
+        return None, ""
+    content = response.content if isinstance(response.content, str) else str(response.content)
+    match = _GROUNDED_RE.search(content)
+    if match is None:
+        return None, content
+    return match.group(1).lower() == "yes", content
 
 
 def _verify_answer_llm(
@@ -108,20 +133,36 @@ def _verify_answer_llm(
     evidence_texts: list[str],
     llm: "BaseChatModel",
     abstain_on_failure: bool = True,
-) -> VerificationResult:
+) -> VerificationResult | None:
     """LLM-as-judge groundedness check — more accurate than keyword overlap,
-    but requires a configured LLM provider."""
-    from langchain_core.messages import HumanMessage, SystemMessage
+    but requires a configured LLM provider.
 
-    evidence_block = "\n".join(evidence_texts)[:4000]  # keep prompt bounded
-    messages = [
-        SystemMessage(content=VERIFY_SYSTEM_PROMPT),
-        HumanMessage(content=f"Evidence:\n{evidence_block}\n\nAnswer:\n{answer}"),
-    ]
-    response = llm.invoke(messages)
-    content = response.content if isinstance(response.content, str) else str(response.content)
+    Returns None when the judge never produced a usable verdict (call error or
+    unparseable reply on every attempt) so the caller can fall back to the
+    keyword check instead of mistaking judge failure for an ungrounded answer.
+    """
+    evidence_block = "\n".join(evidence_texts)[:MAX_EVIDENCE_CHARS]
 
-    is_grounded = bool(re.search(r"GROUNDED:\s*yes", content, re.IGNORECASE))
+    verdict: bool | None = None
+    content = ""
+    for attempt in range(1, LLM_VERIFY_ATTEMPTS + 1):
+        verdict, content = _judge_once(answer, evidence_block, llm)
+        if verdict is not None:
+            break
+        logger.warning(
+            "Verifier gave no usable verdict (attempt %d/%d). Reply: %.300r",
+            attempt,
+            LLM_VERIFY_ATTEMPTS,
+            content,
+        )
+
+    if verdict is None:
+        return None
+
+    is_grounded = verdict
+    if not is_grounded:
+        # Surfaced at WARNING so rejections are visible in deployed logs.
+        logger.warning("Verifier rejected answer. Judge reply: %.500r", content)
     unsupported_match = re.search(r"UNSUPPORTED:\s*(.*)", content, re.IGNORECASE)
     unsupported_raw = unsupported_match.group(1).strip() if unsupported_match else ""
     unsupported = (
@@ -181,9 +222,12 @@ def verify_answer(
 
     llm = _get_llm()
     if llm is not None:
-        return _verify_answer_llm(
+        llm_result = _verify_answer_llm(
             answer, evidence_texts, llm, abstain_on_failure=abstain_on_failure
         )
+        if llm_result is not None:
+            return llm_result
+        logger.warning("LLM verifier unusable — falling back to keyword-overlap check.")
 
     combined_evidence = "\n".join(evidence_texts)
     sentences = _extract_sentences(answer)

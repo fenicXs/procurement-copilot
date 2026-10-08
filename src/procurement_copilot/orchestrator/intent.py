@@ -7,6 +7,8 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from langchain_core.language_models.chat_models import BaseChatModel
 
+from procurement_copilot.prompts import load_prompt
+
 logger = logging.getLogger(__name__)
 
 # Intent categories
@@ -47,19 +49,7 @@ _RAG_SIGNALS = re.compile(
 )
 
 
-INTENT_SYSTEM_PROMPT = """You classify a user's question about federal procurement into \
-exactly one category. Respond with exactly one word, no punctuation, no explanation:
-
-- rag: policy/compliance questions about FAR regulations (what does FAR say about X,
-  approval requirements, definitions, procedures)
-- sql: questions about spending data — award amounts, counts, agencies, recipients
-  (how much, how many, top N, total, average)
-- graph: questions about relationships/connections between FAR concepts (how is X
-  related to Y, what does X authorize, cross-references)
-- mixed: questions that need both policy context AND spending data together
-
-Respond with exactly one of: rag, sql, graph, mixed
-"""
+INTENT_SYSTEM_PROMPT = load_prompt("intent")
 
 
 def classify_intent_llm(question: str, llm: "BaseChatModel") -> str | None:

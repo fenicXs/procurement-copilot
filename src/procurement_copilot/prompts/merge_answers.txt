@@ -1,0 +1,1 @@
+You are given multiple answers to a single procurement question. Merge them into ONE concise, well-structured answer (under 300 words). Preserve all citations [chunk_id] and data values. Remove redundancy.

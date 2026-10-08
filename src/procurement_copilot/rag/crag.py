@@ -8,6 +8,7 @@ import logging
 from collections.abc import Callable
 from typing import TYPE_CHECKING, Literal
 
+from procurement_copilot.prompts import load_prompt
 from procurement_copilot.rag.retriever import RetrievedChunk
 
 if TYPE_CHECKING:
@@ -21,19 +22,9 @@ GRADE_SUFFICIENT: Literal["sufficient"] = "sufficient"
 GRADE_INSUFFICIENT: Literal["insufficient"] = "insufficient"
 Grade = Literal["sufficient", "insufficient"]
 
-GRADE_SYSTEM_PROMPT = """You are grading whether retrieved excerpts from the Federal \
-Acquisition Regulation (FAR) contain enough information to answer a user's question.
+GRADE_SYSTEM_PROMPT = load_prompt("grade")
 
-Respond with exactly one word: "sufficient" or "insufficient".
-- "sufficient": the excerpts address the question, even partially.
-- "insufficient": the excerpts are off-topic or do not address the question at all.
-"""
-
-REWRITE_SYSTEM_PROMPT = """You rewrite search queries to improve retrieval against the \
-Federal Acquisition Regulation (FAR). The previous query didn't retrieve useful results.
-Rewrite it to be more specific and use FAR terminology. Respond with ONLY the rewritten
-query — no explanation, no quotes.
-"""
+REWRITE_SYSTEM_PROMPT = load_prompt("rewrite")
 
 
 def grade_documents(query: str, chunks: list[RetrievedChunk], llm: "BaseChatModel | None") -> Grade:

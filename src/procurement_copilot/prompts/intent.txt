@@ -1,0 +1,11 @@
+You classify a user's question about federal procurement into exactly one category. Respond with exactly one word, no punctuation, no explanation:
+
+- rag: policy/compliance questions about FAR regulations (what does FAR say about X,
+  approval requirements, definitions, procedures)
+- sql: questions about spending data — award amounts, counts, agencies, recipients
+  (how much, how many, top N, total, average)
+- graph: questions about relationships/connections between FAR concepts (how is X
+  related to Y, what does X authorize, cross-references)
+- mixed: questions that need both policy context AND spending data together
+
+Respond with exactly one of: rag, sql, graph, mixed

@@ -163,3 +163,50 @@ class TestVerifyAnswerLLM:
         assert not result.is_grounded
         assert "cannot provide a verified answer" in result.verified_answer.lower()
         assert result.unsupported_claims == ["Quantum computing is used here"]
+
+    def test_unparseable_reply_is_retried_then_succeeds(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.orchestrator.verifier import verify_answer
+
+        llm = _FakeLLM(["", "GROUNDED: yes\nUNSUPPORTED: NONE"])
+        monkeypatch.setattr("procurement_copilot.orchestrator.verifier._get_llm", lambda: llm)
+
+        result = verify_answer("The officer must get approval.", ["evidence text"])
+        assert result.is_grounded
+        assert len(llm.calls) == 2
+
+    def test_judge_exception_falls_back_to_keyword_check(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.orchestrator.verifier import verify_answer
+
+        class _ErrorLLM:
+            calls = 0
+
+            def invoke(self, messages: list) -> None:
+                _ErrorLLM.calls += 1
+                raise RuntimeError("429 Too Many Requests")
+
+        monkeypatch.setattr("procurement_copilot.orchestrator.verifier._get_llm", _ErrorLLM)
+
+        # Evidence supports the answer, so the keyword fallback must verify it
+        # instead of the judge failure being read as "ungrounded".
+        result = verify_answer(
+            "The simplified acquisition threshold is $350,000 for most procurements.",
+            ["The simplified acquisition threshold is $350,000 for most procurements."],
+        )
+        assert result.is_grounded
+        assert _ErrorLLM.calls == 2  # retried once before falling back
+
+    def test_evidence_beyond_old_4000_char_cap_reaches_the_judge(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.orchestrator.verifier import verify_answer
+
+        llm = _FakeLLM(["GROUNDED: yes\nUNSUPPORTED: NONE"])
+        monkeypatch.setattr("procurement_copilot.orchestrator.verifier._get_llm", lambda: llm)
+
+        chunks = ["filler " * 150] * 4 + ["the late-chunk fact: $350,000"]
+        verify_answer("Threshold is $350,000.", chunks)
+        assert "late-chunk fact" in llm.calls[0][1].content

@@ -4,6 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from procurement_copilot.prompts import load_prompt
 from procurement_copilot.rag.retriever import RetrievedChunk
 
 logger = logging.getLogger(__name__)
@@ -69,15 +70,7 @@ def _get_llm():  # type: ignore[no-untyped-def]
     return get_llm()
 
 
-RAG_SYSTEM_PROMPT = """You are a procurement policy expert. Answer the user's question
-based ONLY on the provided context from the Federal Acquisition Regulation (FAR).
-
-Rules:
-- Only use information from the provided context chunks.
-- Cite your sources using [chunk_id] notation after each claim.
-- If the context does not contain enough information, say so explicitly.
-- Be precise and concise.
-"""
+RAG_SYSTEM_PROMPT = load_prompt("rag_answer")
 
 
 def generate_rag_answer(
