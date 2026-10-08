@@ -11,8 +11,10 @@ Replaces the retired FAISS + heading-overlap-heuristic pipeline.
 """
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from procurement_copilot.config import settings
 
@@ -23,8 +25,39 @@ SPARSE_VECTOR_NAME = "sparse"
 
 # Lazy singletons — the cross-encoder and sparse model are expensive to load
 # and shouldn't be reconstructed per query.
-_reranker = None
+_reranker: Any = None
 _sparse_embedder = None
+
+
+def _resolve_embedding_provider() -> str:
+    """Same precedence as llm.get_embeddings() — kept in sync deliberately so
+    the reranker backend follows the same provider knob as the embedder."""
+    return (
+        os.environ.get("EMBEDDING_PROVIDER", "")
+        or settings.EMBEDDING_PROVIDER
+        or os.environ.get("LLM_PROVIDER", "")
+        or settings.LLM_PROVIDER
+    ).lower()
+
+
+class _FastEmbedRerankerAdapter:
+    """Adapts fastembed's TextCrossEncoder.rerank(query, docs) to the
+    CrossEncoder.predict(pairs) shape _rerank() already calls — ONNX-only,
+    no torch/sentence-transformers. Used when EMBEDDING_PROVIDER=fastembed:
+    that torch dependency chain is what OOM-killed the first free-tier
+    (512MB RAM) cloud deploy attempt."""
+
+    def __init__(self, model_name: str, threads: int | None = None):
+        from fastembed.rerank.cross_encoder import TextCrossEncoder
+
+        self._model = TextCrossEncoder(model_name, threads=threads or len(os.sched_getaffinity(0)))
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        if not pairs:
+            return []
+        query = pairs[0][0]
+        docs = [doc for _, doc in pairs]
+        return list(self._model.rerank(query, docs))
 
 
 @dataclass
@@ -56,12 +89,15 @@ def _get_sparse_embedder():  # type: ignore[no-untyped-def]
     return _sparse_embedder
 
 
-def _get_reranker():  # type: ignore[no-untyped-def]
+def _get_reranker() -> Any:
     global _reranker
     if _reranker is None:
-        from sentence_transformers import CrossEncoder
+        if _resolve_embedding_provider() == "fastembed":
+            _reranker = _FastEmbedRerankerAdapter(settings.FASTEMBED_RERANKER_MODEL)
+        else:
+            from sentence_transformers import CrossEncoder
 
-        _reranker = CrossEncoder(settings.RERANKER_MODEL)
+            _reranker = CrossEncoder(settings.RERANKER_MODEL)
     return _reranker
 
 

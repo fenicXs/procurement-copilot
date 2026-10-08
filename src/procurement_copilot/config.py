@@ -51,6 +51,10 @@ class Settings(BaseSettings):
     QDRANT_COLLECTION: str = "far_chunks"
     SPARSE_MODEL: str = "Qdrant/bm25"
     RERANKER_MODEL: str = "BAAI/bge-reranker-v2-m3"
+    # ONNX reranker used when EMBEDDING_PROVIDER=fastembed — avoids pulling
+    # torch/sentence-transformers (a huge dependency, the actual cause of an
+    # OOM crash on a 512MB free-tier deploy) into the lightweight CPU path.
+    FASTEMBED_RERANKER_MODEL: str = "Xenova/ms-marco-MiniLM-L-6-v2"
 
     # --- Evaluation (RAGAS) ---
     # Forces the local, free judge regardless of which provider answers
