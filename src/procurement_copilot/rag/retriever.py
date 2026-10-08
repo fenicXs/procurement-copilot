@@ -101,12 +101,23 @@ def _get_reranker() -> Any:
     return _reranker
 
 
+_qdrant_clients: dict[str, Any] = {}
+
+
 def get_qdrant_client(index_dir: Path | None = None):  # type: ignore[no-untyped-def]
-    """Open the local-mode Qdrant store (no server process required)."""
+    """Open the local-mode Qdrant store (no server process required).
+
+    One client per index path, reused across queries: local mode loads the
+    whole collection into RAM, so opening (and never closing) a fresh client
+    per query leaked a full index copy each time and OOM-killed the 2GiB
+    Cloud Run instance on the second request.
+    """
     from qdrant_client import QdrantClient
 
-    path = index_dir or settings.VECTOR_INDEX_DIR
-    return QdrantClient(path=str(path))
+    path = str(index_dir or settings.VECTOR_INDEX_DIR)
+    if path not in _qdrant_clients:
+        _qdrant_clients[path] = QdrantClient(path=path)
+    return _qdrant_clients[path]
 
 
 def _hybrid_search(client, collection: str, query: str, limit: int) -> list:  # type: ignore[no-untyped-def]
