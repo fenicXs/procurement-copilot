@@ -10,8 +10,10 @@ Retrieval is two-stage:
 Replaces the retired FAISS + heading-overlap-heuristic pipeline.
 """
 
+import json
 import logging
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -140,6 +142,80 @@ def _rerank_stage2(query: str, ranked: list[RetrievedChunk]) -> list[RetrievedCh
     return head + tail
 
 
+# --- Section-number pinning -------------------------------------------------
+# A question like "What does FAR 6.302-1 say...?" names the section it wants,
+# but semantic rerankers rank chunks that merely *cite* "6.302-1" above the
+# chunk that *is* that section (it sat at rank 19). Pinning is a pure text
+# lookup — no model, negligible memory — so it's safe on the small instance.
+
+_QUERY_SECTION_RE = re.compile(r"(?<![\w.])(\d{1,2}\.\d{3}(?:-\d+)?)(?![\w-]|\.\d)")
+_HEADING_RE = re.compile(r"(?<![\w.(\-])(\d{1,2}\.\d{3}(?:-\d+)?)(?![\w\-]|\.\d)\s+(?=[A-Z])")
+_NEXT_SECTION_RE = re.compile(r"(?<![\w.(\-])\d{1,2}\.\d{3}(?:-\d+)?\s+[A-Z]")
+_SUBPART_RE = re.compile(r"\bSubpart\s+\d+\.\d+\b")
+MAX_PINNED = 2
+
+_section_index: dict[str, list[RetrievedChunk]] | None = None
+
+
+def _is_section_body(text: str, match: re.Match[str]) -> bool:
+    """True when the heading hit starts real section text — not a table-of-contents
+    line (another section heading follows immediately), a page running header
+    ("6.302-1 Subpart 6.3 - ..."), or a Subpart banner."""
+    tail = text[match.end() : match.end() + 260]
+    return not (
+        tail.startswith("Subpart") or _NEXT_SECTION_RE.search(tail) or _SUBPART_RE.search(tail)
+    )
+
+
+def _load_section_index() -> dict[str, list[RetrievedChunk]]:
+    path = Path(settings.DATA_DIR) / "processed" / "far_chunks.jsonl"
+    index: dict[str, list[RetrievedChunk]] = {}
+    if not path.is_file():
+        return index
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            rec = json.loads(line)
+            text = rec.get("text", "")
+            seen: set[str] = set()
+            for m in _HEADING_RE.finditer(text):
+                if m.group(1) not in seen and _is_section_body(text, m):
+                    seen.add(m.group(1))
+                    index.setdefault(m.group(1), []).append(
+                        RetrievedChunk(
+                            chunk_id=rec.get("chunk_id", ""),
+                            text=text,
+                            page_start=rec.get("page_start", 0),
+                            page_end=rec.get("page_end", 0),
+                            section_heading=rec.get("section_heading", ""),
+                            source_url=rec.get("source_url", ""),
+                            score=0.0,
+                        )
+                    )
+    return index
+
+
+def _pinned_chunks(query: str) -> list[RetrievedChunk]:
+    """Chunks that open the FAR section(s) the query names, at most MAX_PINNED."""
+    global _section_index
+    sections = list(dict.fromkeys(_QUERY_SECTION_RE.findall(query)))
+    if not sections:
+        return []
+    if _section_index is None:
+        _section_index = _load_section_index()
+    pinned: list[RetrievedChunk] = []
+    for sec in sections:
+        pinned.extend(_section_index.get(sec, [])[:1])
+    return pinned[:MAX_PINNED]
+
+
+def _apply_pins(query: str, ranked: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    pinned = _pinned_chunks(query)
+    if not pinned:
+        return ranked
+    pinned_ids = {c.chunk_id for c in pinned}
+    return pinned + [c for c in ranked if c.chunk_id not in pinned_ids]
+
+
 _qdrant_clients: dict[str, Any] = {}
 
 
@@ -244,4 +320,8 @@ def retrieve(
         )
 
     reranked = _rerank_stage2(query, _rerank(query, candidates))
+    # Only the production corpus has the section index; a caller-supplied
+    # index (tests, fixtures) must not get real FAR chunks injected.
+    if index_dir is None or Path(index_dir) == Path(settings.VECTOR_INDEX_DIR):
+        reranked = _apply_pins(query, reranked)
     return reranked[:top_k]

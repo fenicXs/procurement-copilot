@@ -116,6 +116,79 @@ class TestRerank:
         assert not called
 
 
+class TestSectionPinning:
+    def _install_index(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.rag import retriever
+
+        monkeypatch.setattr(
+            retriever,
+            "_section_index",
+            {"6.302-1": [_make_chunk("sec", "6.302-1 Only one source")]},
+        )
+
+    def test_query_naming_a_section_pins_its_chunk_first(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        ranked = [_make_chunk("a", "x"), _make_chunk("sec", "dup"), _make_chunk("b", "y")]
+        out = retriever._apply_pins("What does FAR 6.302-1 say about sole source?", ranked)
+        assert [c.chunk_id for c in out] == ["sec", "a", "b"]  # pinned first, no duplicate
+
+    def test_no_section_in_query_leaves_ranking_untouched(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        ranked = [_make_chunk("a", "x"), _make_chunk("b", "y")]
+        assert (
+            retriever._apply_pins("What is the simplified acquisition threshold?", ranked) == ranked
+        )
+
+    def test_unknown_section_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        ranked = [_make_chunk("a", "x")]
+        assert retriever._apply_pins("Explain FAR 99.999", ranked) == ranked
+
+    @pytest.mark.parametrize(
+        "text, is_body",
+        [
+            ("6.302-1 Only one responsible source. (a) Authority. (1) Citations: 10 U.S.C.", True),
+            (
+                "6.302-1 Only one responsible source and no other. 6.302-2 Unusual and compelling",
+                False,
+            ),
+            ("6.302-1 Subpart 6.3 - Other Than Full and Open Competition 6.300 Scope", False),
+        ],
+    )
+    def test_heading_filter_rejects_toc_and_running_headers(self, text: str, is_body: bool) -> None:
+        from procurement_copilot.rag import retriever
+
+        m = retriever._HEADING_RE.search(text)
+        assert m is not None
+        assert retriever._is_section_body(text, m) is is_body
+
+    def test_caller_supplied_index_never_gets_real_chunks_injected(
+        self, tmp_qdrant_index: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        called = False
+
+        def _spy(query, ranked):  # type: ignore[no-untyped-def]
+            nonlocal called
+            called = True
+            return ranked
+
+        monkeypatch.setattr(retriever, "_apply_pins", _spy)
+        retrieve("sole source 6.302-1", top_k=2, index_dir=tmp_qdrant_index)
+        assert not called
+
+
 class TestRerankStage2:
     def _chunks(self) -> list[RetrievedChunk]:
         # stage-1 order: a, b, c, d (scores descending)
