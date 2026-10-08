@@ -115,6 +115,9 @@ def _rerank(query: str, candidates: list[RetrievedChunk]) -> list[RetrievedChunk
     return candidates
 
 
+MIN_CANDIDATE_POOL = 100
+
+
 def retrieve(
     query: str,
     top_k: int = 5,
@@ -122,11 +125,20 @@ def retrieve(
 ) -> list[RetrievedChunk]:
     """Retrieve the top-k most relevant chunks for a query.
 
-    Pulls `top_k * 4` hybrid candidates, then reranks with a cross-encoder
+    Pulls a wide hybrid candidate pool, then reranks with a cross-encoder
     and returns the top_k survivors, best first.
+
+    The pool floor (`MIN_CANDIDATE_POOL`) matters more than it looks: FAR is
+    full of chunks that merely *reference* a defined term (e.g. "the
+    simplified acquisition threshold") without stating its value, so the one
+    chunk that actually defines it can rank well outside `top_k * 4` on both
+    dense and sparse signals alone — confirmed empirically, it was sitting at
+    hybrid rank ~58 for a flagship demo question. The cross-encoder reranker
+    disambiguates this correctly once it's given a wide enough pool to see
+    the chunk at all (promoted it to rank 1 at pool size 100).
     """
     client = get_qdrant_client(index_dir)
-    candidate_limit = top_k * 4
+    candidate_limit = max(top_k * 4, MIN_CANDIDATE_POOL)
 
     points = _hybrid_search(client, settings.QDRANT_COLLECTION, query, candidate_limit)
 

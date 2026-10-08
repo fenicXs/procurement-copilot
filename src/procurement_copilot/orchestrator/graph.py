@@ -94,6 +94,7 @@ def rag_answer_node(
                     "page_start": c.page_start,
                     "page_end": c.page_end,
                     "section_heading": c.section_heading,
+                    "source_url": c.source_url,
                 }
                 for c in result.citations
             ],
@@ -614,7 +615,9 @@ def run_query(
     attached per-call (not module-global) so concurrent requests don't bleed
     into each other's traces; it's a no-op when LangFuse keys aren't set.
     """
+    from procurement_copilot.audit_log import log_query
     from procurement_copilot.observability import flush_and_get_trace_url, get_langfuse_handler
+    from procurement_copilot.rag.answer import ABSTAIN_MESSAGE
 
     app = build_graph(index_dir=index_dir, db_path=db_path, kg_path=kg_path)
 
@@ -634,13 +637,24 @@ def run_query(
         logger.info("LangFuse trace: %s", trace_url)
 
     contexts, _ = _collect_evidence(final_state)
+    citations = final_state.get("rag_citations", [])
+    abstained = final_state.get("final_answer", "") == ABSTAIN_MESSAGE
+
+    log_query(
+        question=question,
+        intent=final_state.get("intent", ""),
+        is_verified=final_state.get("is_verified", False),
+        abstained=abstained,
+        citation_chunk_ids=[c["chunk_id"] for c in citations],
+        session_id=session_id,
+    )
 
     return CopilotResponse(
         question=question,
         intent=final_state.get("intent", ""),
         answer=final_state.get("final_answer", ""),
         is_verified=final_state.get("is_verified", False),
-        citations=final_state.get("rag_citations", []),
+        citations=citations,
         sql_query=final_state.get("sql_query", ""),
         graph_triples=final_state.get("graph_triples", []),
         contexts=contexts,

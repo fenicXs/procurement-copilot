@@ -15,7 +15,9 @@ _PROVIDER_ENV_VARS = (
     "OPENAI_API_KEY",
     "ANTHROPIC_API_KEY",
     "BYTEZ_API_KEY",
+    "GROQ_API_KEY",
     "LLM_PROVIDER",
+    "EMBEDDING_PROVIDER",
     "LANGFUSE_PUBLIC_KEY",
     "LANGFUSE_SECRET_KEY",
 )
@@ -26,3 +28,11 @@ def _no_ambient_provider_config(monkeypatch):
     for key in _PROVIDER_ENV_VARS:
         monkeypatch.delenv(key, raising=False)
         monkeypatch.setattr(settings, key, "", raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _isolated_audit_log(monkeypatch, tmp_path):
+    """run_query() writes an audit log entry on every call — redirect it to a
+    tmp path so test runs don't append to the real project logs/ directory.
+    """
+    monkeypatch.setattr(settings, "AUDIT_LOG_PATH", tmp_path / "test_audit.jsonl")

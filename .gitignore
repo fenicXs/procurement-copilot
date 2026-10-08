@@ -29,6 +29,9 @@ eval/report.md
 eval/report_legacy.md
 eval/results/*.json
 
+# Audit log (runtime-generated)
+logs/
+
 # OS
 .DS_Store
 Thumbs.db

@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Procurement Copilot</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Procurement Copilot</h1>
+    <p class="subtitle">Ask a question about federal acquisition policy or contract spending.</p>
+  </header>
+
+  <main id="chat" aria-live="polite"></main>
+
+  <form id="ask-form" autocomplete="off">
+    <input
+      id="question"
+      type="text"
+      placeholder="e.g. What is the simplified acquisition threshold?"
+      maxlength="1000"
+      required
+    />
+    <button id="ask-btn" type="submit">Ask</button>
+  </form>
+
+  <p class="examples">
+    Try:
+    <button class="example" type="button">What is the simplified acquisition threshold?</button>
+    <button class="example" type="button">Top 5 recipients by total award amount</button>
+    <button class="example" type="button">How many awards did the Department of Defense receive?</button>
+  </p>
+
+  <script src="app.js"></script>
+</body>
+</html>

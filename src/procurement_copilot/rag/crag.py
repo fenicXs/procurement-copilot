@@ -49,7 +49,12 @@ def grade_documents(query: str, chunks: list[RetrievedChunk], llm: "BaseChatMode
 
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    context = "\n\n".join(c.text[:500] for c in chunks)
+    # Grade on the full chunk text, not a truncated slice — a 500-char cap
+    # previously cut chunks off mid-sentence and, in one confirmed case, cut
+    # off right before the one fact (a dollar figure) that made the chunk
+    # sufficient, causing a false "insufficient" grade on a correctly
+    # retrieved chunk. The judge must see what the generator will see.
+    context = "\n\n".join(c.text for c in chunks)
     messages = [
         SystemMessage(content=GRADE_SYSTEM_PROMPT),
         HumanMessage(content=f"Question: {query}\n\nExcerpts:\n{context}"),

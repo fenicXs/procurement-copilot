@@ -1,9 +1,11 @@
-"""Tests for the Ollama provider branch in llm.py (construction-only, no network calls)."""
+"""Tests for the Ollama/Groq/fastembed provider branches in llm.py
+(construction-only, no network calls)."""
 
+from langchain_groq import ChatGroq
 from langchain_ollama import ChatOllama, OllamaEmbeddings
 
 from procurement_copilot.config import settings
-from procurement_copilot.llm import get_embeddings, get_llm
+from procurement_copilot.llm import FastEmbedEmbeddings, get_embeddings, get_llm
 
 # NOTE: settings.OLLAMA_* fields are read from the environment once at process
 # start (pydantic-settings), so monkeypatching them mid-test has no effect on
@@ -52,3 +54,51 @@ def test_get_embeddings_ollama_override(monkeypatch):
     assert isinstance(embeddings, OllamaEmbeddings)
     assert embeddings.base_url == settings.OLLAMA_BASE_URL
     assert embeddings.model == settings.OLLAMA_EMBED_MODEL
+
+
+def test_get_llm_groq_override(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+
+    llm = get_llm()
+
+    assert isinstance(llm, ChatGroq)
+    assert llm.model_name == settings.GROQ_MODEL
+
+
+def test_get_llm_groq_override_wins_over_cloud_keys(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-fake")
+
+    llm = get_llm()
+
+    assert isinstance(llm, ChatGroq)
+
+
+def test_get_embeddings_fastembed_override(monkeypatch):
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fastembed")
+
+    embeddings = get_embeddings()
+
+    assert isinstance(embeddings, FastEmbedEmbeddings)
+    assert embeddings.model_name == settings.FASTEMBED_DENSE_MODEL
+
+
+def test_get_embeddings_embedding_provider_independent_of_llm_provider(monkeypatch):
+    """A deployment can use Groq for chat while using fastembed for retrieval —
+    the two provider knobs must not be coupled."""
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+    monkeypatch.setenv("EMBEDDING_PROVIDER", "fastembed")
+
+    assert isinstance(get_llm(), ChatGroq)
+    assert isinstance(get_embeddings(), FastEmbedEmbeddings)
+
+
+def test_get_embeddings_falls_back_to_llm_provider_when_unset(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "ollama")
+
+    embeddings = get_embeddings()
+
+    assert isinstance(embeddings, OllamaEmbeddings)

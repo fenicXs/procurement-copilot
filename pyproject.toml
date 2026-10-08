@@ -22,10 +22,12 @@ dependencies = [
     "pypdf>=5.0,<6",
     "bytez>=1,<2",
     "langchain-ollama>=0.2,<0.3",
+    "langchain-groq>=0.2,<0.4",
     "langfuse>=4,<5",
     "qdrant-client>=1.11,<2",
     "fastembed>=0.4,<1",
     "sentence-transformers>=3,<4",
+    "slowapi>=0.1,<1",
     # Pinned to the 0.2.x line deliberately: ragas>=0.3 pulls datasets>=4.0,
     # which requires huggingface-hub>=1.0 — incompatible with the
     # huggingface-hub<1.0 ceiling that transformers/sentence-transformers

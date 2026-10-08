@@ -18,10 +18,19 @@ class Settings(BaseSettings):
     OPENAI_API_KEY: str = ""
     ANTHROPIC_API_KEY: str = ""
     BYTEZ_API_KEY: str = ""
+    GROQ_API_KEY: str = ""
 
-    # --- Explicit provider override: "openai"|"anthropic"|"bytez"|"ollama". ---
+    # --- Explicit provider override: "openai"|"anthropic"|"bytez"|"ollama"|"groq". ---
     # Empty = auto fallback chain.
     LLM_PROVIDER: str = ""
+    GROQ_MODEL: str = "openai/gpt-oss-20b"
+
+    # --- Embedding provider override, independent of LLM_PROVIDER: lets a
+    # deployment use a hosted LLM (e.g. "groq") for generation while using
+    # free CPU-only "fastembed" embeddings — no GPU, no API key needed for
+    # retrieval. Falls back to LLM_PROVIDER's chain when unset. ---
+    EMBEDDING_PROVIDER: str = ""
+    FASTEMBED_DENSE_MODEL: str = "BAAI/bge-small-en-v1.5"
 
     # --- Ollama (local, free) ---
     OLLAMA_BASE_URL: str = "http://localhost:11434"
@@ -53,6 +62,7 @@ class Settings(BaseSettings):
     DB_PATH: Path = _PROJECT_ROOT / "data" / "processed" / "procurement.duckdb"
     VECTOR_INDEX_DIR: Path = _PROJECT_ROOT / "data" / "processed" / "vector_index"
     KG_PATH: Path = _PROJECT_ROOT / "data" / "processed" / "kg.parquet"
+    AUDIT_LOG_PATH: Path = _PROJECT_ROOT / "logs" / "audit.jsonl"
 
     # --- Runtime ---
     LOG_LEVEL: str = "INFO"
