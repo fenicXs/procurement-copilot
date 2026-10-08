@@ -58,8 +58,10 @@ class Settings(BaseSettings):
     # Optional second rerank stage (fastembed path only): the small model above
     # shortlists, then this stronger one re-scores just the shortlist. Fixes
     # defining chunks (e.g. FAR 6.302-1) that MiniLM ranks below chunks that
-    # merely cite them. Empty string disables stage 2.
-    FASTEMBED_RERANKER2_MODEL: str = "BAAI/bge-reranker-v2-m3-int8"
+    # merely cite them. Empty string disables stage 2. OFF by default: on the
+    # 4GiB Cloud Run instance bge-reranker-v2-m3-int8 over a 25-chunk shortlist
+    # was OOM-killed (4.2-4.3GiB used) — see git history before re-enabling.
+    FASTEMBED_RERANKER2_MODEL: str = ""
     RERANK_SHORTLIST: int = 25
 
     # --- Evaluation (RAGAS) ---
