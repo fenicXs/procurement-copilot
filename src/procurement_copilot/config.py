@@ -29,7 +29,10 @@ class Settings(BaseSettings):
     # WITHOUT prepaid billing, otherwise calls fail with HTTP 402). Gemini 2.5
     # models are scheduled to shut down on 2026-10-16, so default to 3.x. ---
     GEMINI_API_KEY: str = ""
-    GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+    # Judge benchmark (2026-10-09, 10 RAG qs x2): 3.5-flash-lite caught 20/20
+    # fabrications and accepted 16/20 real answers; 3.1-flash-lite rejected 60%
+    # of correct answers; 3-flash-preview often returned unparseable replies.
+    GEMINI_MODEL: str = "gemini-3.5-flash-lite"
 
     # --- Optional separate provider for the groundedness judge, so the model
     # that checks an answer isn't the one that wrote it. Empty = same as

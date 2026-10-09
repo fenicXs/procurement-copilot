@@ -104,6 +104,22 @@ def test_verifier_uses_separate_provider_when_configured(monkeypatch):
     assert isinstance(verifier._get_llm(), ChatGoogleGenerativeAI)
 
 
+def test_verifier_falls_back_to_default_provider_when_judge_provider_breaks(monkeypatch):
+    from procurement_copilot import llm as llm_module
+    from procurement_copilot.orchestrator import verifier
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+    monkeypatch.setenv("VERIFIER_LLM_PROVIDER", "gemini")
+
+    def _boom():
+        raise ValueError("missing GEMINI_API_KEY")
+
+    monkeypatch.setattr(llm_module, "_gemini_chat", _boom)
+
+    assert isinstance(verifier._get_llm(), ChatGroq)
+
+
 def test_get_llm_groq_override_wins_over_cloud_keys(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")

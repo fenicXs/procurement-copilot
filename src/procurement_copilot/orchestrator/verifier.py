@@ -99,7 +99,16 @@ def _get_llm():  # type: ignore[no-untyped-def]
     from procurement_copilot.llm import get_llm
 
     override = os.environ.get("VERIFIER_LLM_PROVIDER", "") or settings.VERIFIER_LLM_PROVIDER
-    return get_llm(override or None)
+    if override:
+        try:
+            return get_llm(override)
+        except Exception:  # e.g. missing/invalid key — never break answering over the judge
+            logger.warning(
+                "Verifier provider %r unavailable — using the default provider.",
+                override,
+                exc_info=True,
+            )
+    return get_llm()
 
 
 VERIFY_SYSTEM_PROMPT = load_prompt("verify")
