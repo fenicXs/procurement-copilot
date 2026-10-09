@@ -35,6 +35,6 @@ jobs:
           service: ${{ env.SERVICE }}
           region: ${{ env.REGION }}
           source: .
-          flags: --memory 4Gi --concurrency 2 --max-instances 2 --port 8000 --allow-unauthenticated
+          flags: --memory 8Gi --cpu 2 --concurrency 1 --max-instances 2 --port 8000 --allow-unauthenticated
           env_vars: |
             GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
