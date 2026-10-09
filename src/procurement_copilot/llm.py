@@ -96,22 +96,38 @@ def _groq_chat() -> BaseChatModel:
     )
 
 
-def get_llm() -> BaseChatModel | None:
+def _gemini_chat() -> BaseChatModel:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    logger.info("Using Gemini LLM provider (%s).", settings.GEMINI_MODEL)
+    return ChatGoogleGenerativeAI(
+        model=settings.GEMINI_MODEL,
+        google_api_key=_get_key("GEMINI_API_KEY"),
+        temperature=0,
+        max_retries=3,  # free-tier 429s are bursty; back off instead of failing
+    )
+
+
+def get_llm(provider_override: str | None = None) -> BaseChatModel | None:
     """Get the best available chat model.
 
     Fallback chain: OpenAI → Anthropic → Bytez → None.
-    Set LLM_PROVIDER ("openai"|"anthropic"|"bytez"|"ollama"|"groq") to force a
-    specific provider — this is the only way to opt into Ollama or Groq, since
-    neither is auto-detected, so offline/CI test runs never pick them up
-    silently.
+    Set LLM_PROVIDER ("openai"|"anthropic"|"bytez"|"ollama"|"groq"|"gemini") to
+    force a specific provider — this is the only way to opt into Ollama, Groq
+    or Gemini, since none is auto-detected, so offline/CI test runs never pick
+    them up silently. `provider_override` takes precedence over LLM_PROVIDER
+    (used to give the verifier a different model than the generator).
     """
-    provider = (_get_key("LLM_PROVIDER") or settings.LLM_PROVIDER).lower()
+    provider = (provider_override or _get_key("LLM_PROVIDER") or settings.LLM_PROVIDER).lower()
 
     if provider == "ollama":
         return _ollama_chat()
 
     if provider == "groq":
         return _groq_chat()
+
+    if provider == "gemini":
+        return _gemini_chat()
 
     if provider in ("", "openai") and _get_key("OPENAI_API_KEY"):
         from langchain_openai import ChatOpenAI

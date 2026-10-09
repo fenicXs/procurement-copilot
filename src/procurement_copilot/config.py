@@ -25,6 +25,17 @@ class Settings(BaseSettings):
     LLM_PROVIDER: str = ""
     GROQ_MODEL: str = "openai/gpt-oss-20b"
 
+    # --- Google Gemini (AI Studio key; free tier needs a key from a project
+    # WITHOUT prepaid billing, otherwise calls fail with HTTP 402). Gemini 2.5
+    # models are scheduled to shut down on 2026-10-16, so default to 3.x. ---
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-3.1-flash-lite"
+
+    # --- Optional separate provider for the groundedness judge, so the model
+    # that checks an answer isn't the one that wrote it. Empty = same as
+    # LLM_PROVIDER. ---
+    VERIFIER_LLM_PROVIDER: str = ""
+
     # --- Embedding provider override, independent of LLM_PROVIDER: lets a
     # deployment use a hosted LLM (e.g. "groq") for generation while using
     # free CPU-only "fastembed" embeddings — no GPU, no API key needed for

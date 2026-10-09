@@ -91,9 +91,15 @@ def _sentence_has_evidence(sentence: str, evidence_text: str, threshold: float =
 
 
 def _get_llm():  # type: ignore[no-untyped-def]
+    """The judge model: VERIFIER_LLM_PROVIDER when set (so the checker isn't
+    the model that wrote the answer), otherwise the default provider."""
+    import os
+
+    from procurement_copilot.config import settings
     from procurement_copilot.llm import get_llm
 
-    return get_llm()
+    override = os.environ.get("VERIFIER_LLM_PROVIDER", "") or settings.VERIFIER_LLM_PROVIDER
+    return get_llm(override or None)
 
 
 VERIFY_SYSTEM_PROMPT = load_prompt("verify")

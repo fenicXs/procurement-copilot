@@ -66,6 +66,44 @@ def test_get_llm_groq_override(monkeypatch):
     assert llm.model_name == settings.GROQ_MODEL
 
 
+def test_get_llm_gemini_override(monkeypatch):
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    monkeypatch.setenv("LLM_PROVIDER", "gemini")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+
+    llm = get_llm()
+
+    assert isinstance(llm, ChatGoogleGenerativeAI)
+    assert llm.model.endswith(settings.GEMINI_MODEL)
+
+
+def test_get_llm_provider_override_arg_wins_over_llm_provider(monkeypatch):
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+
+    assert isinstance(get_llm("gemini"), ChatGoogleGenerativeAI)
+    assert isinstance(get_llm(), ChatGroq)  # no override -> unchanged behaviour
+
+
+def test_verifier_uses_separate_provider_when_configured(monkeypatch):
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    from procurement_copilot.orchestrator import verifier
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+    monkeypatch.setenv("GEMINI_API_KEY", "fake-gemini-key")
+
+    assert isinstance(verifier._get_llm(), ChatGroq)  # default: same as generator
+
+    monkeypatch.setenv("VERIFIER_LLM_PROVIDER", "gemini")
+    assert isinstance(verifier._get_llm(), ChatGoogleGenerativeAI)
+
+
 def test_get_llm_groq_override_wins_over_cloud_keys(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
