@@ -164,6 +164,51 @@ class TestVerifyAnswerLLM:
         assert "cannot provide a verified answer" in result.verified_answer.lower()
         assert result.unsupported_claims == ["Quantum computing is used here"]
 
+    def test_partially_unsupported_answer_is_trimmed_not_discarded(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.orchestrator.verifier import TRIM_NOTE, verify_answer
+
+        answer = (
+            "The clause sets standard commercial contract terms and conditions. "
+            "It can be tailored by the contracting officer after market research, "
+            "and is incorporated by reference."
+        )
+        reply = (
+            "GROUNDED: no\nUNSUPPORTED:\n"
+            "- It can be tailored by the contracting officer after market research, "
+            "and is incorporated by reference."
+        )
+        llm = _FakeLLM([reply])
+        monkeypatch.setattr("procurement_copilot.orchestrator.verifier._get_llm", lambda: llm)
+
+        result = verify_answer(answer, ["evidence"])
+        assert not result.is_grounded  # UI still flags it as not fully verified
+        assert result.verified_answer.startswith("The clause sets standard commercial")
+        assert "tailored" not in result.verified_answer
+        assert result.verified_answer.endswith(TRIM_NOTE)
+        assert len(result.unsupported_claims) == 1
+
+    def test_unmatched_flagged_claim_still_abstains(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.orchestrator.verifier import verify_answer
+
+        reply = "GROUNDED: no\nUNSUPPORTED:\n- Something the answer never said"
+        llm = _FakeLLM([reply])
+        monkeypatch.setattr("procurement_copilot.orchestrator.verifier._get_llm", lambda: llm)
+
+        result = verify_answer("The officer must obtain approval before award.", ["evidence"])
+        assert "cannot provide a verified answer" in result.verified_answer.lower()
+
+    def test_parse_unsupported_handles_bullets_commas_and_none(self) -> None:
+        from procurement_copilot.orchestrator.verifier import _parse_unsupported
+
+        assert _parse_unsupported("GROUNDED: yes\nUNSUPPORTED: NONE") == []
+        assert _parse_unsupported("GROUNDED: no\nUNSUPPORTED:\n- one, with comma.\n- two.") == [
+            "one, with comma.",
+            "two.",
+        ]
+        assert _parse_unsupported("GROUNDED: no\nUNSUPPORTED: a claim") == ["a claim"]
+
     def test_unparseable_reply_is_retried_then_succeeds(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:

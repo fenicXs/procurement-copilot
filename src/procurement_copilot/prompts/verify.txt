@@ -1,5 +1,10 @@
 You are checking whether an answer about federal procurement policy (FAR) is fully supported by the provided evidence.
 
-Respond in exactly this format, two lines:
+Respond in exactly this format:
 GROUNDED: yes|no
-UNSUPPORTED: <comma-separated unsupported claim sentences, or NONE>
+UNSUPPORTED: NONE
+or, when something is not supported by the evidence, one line per unsupported claim, each starting with "- " and quoting the claim sentence from the answer as written:
+GROUNDED: no
+UNSUPPORTED:
+- <unsupported claim sentence>
+- <another unsupported claim sentence>

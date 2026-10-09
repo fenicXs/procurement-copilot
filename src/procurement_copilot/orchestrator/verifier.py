@@ -107,6 +107,65 @@ LLM_VERIFY_ATTEMPTS = 2
 _GROUNDED_RE = re.compile(r"GROUNDED:\s*(yes|no)", re.IGNORECASE)
 
 
+ABSTAIN_ANSWER = (
+    "I cannot provide a verified answer to this question. "
+    "The available evidence does not sufficiently support a response."
+)
+TRIM_NOTE = (
+    "\n\nNote: Some claims could not be verified against the available evidence "
+    "and have been removed."
+)
+MIN_TRIMMED_CHARS = 40
+_CLAIM_MATCH_THRESHOLD = 0.6
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+")
+_UNSUPPORTED_RE = re.compile(r"UNSUPPORTED:\s*(.*)", re.IGNORECASE | re.DOTALL)
+_BULLET_RE = re.compile(r"^\s*(?:[-*•]|\d+[.)])\s+")
+
+
+def _parse_unsupported(content: str) -> list[str]:
+    """Pull the judge's unsupported-claim list: one claim per bullet line, or
+    (older format) a single comma-separated line."""
+    match = _UNSUPPORTED_RE.search(content)
+    raw = match.group(1).strip() if match else ""
+    if not raw or raw.upper().startswith("NONE"):
+        return []
+    lines = [ln for ln in raw.splitlines() if ln.strip()]
+    if any(_BULLET_RE.match(ln) for ln in lines):
+        return [_BULLET_RE.sub("", ln).strip().strip("\"'") for ln in lines if ln.strip()]
+    return [c.strip() for c in raw.split(",") if c.strip()]
+
+
+def _words(text: str) -> set[str]:
+    return set(re.findall(r"[a-z0-9$%.,]{3,}", text.lower()))
+
+
+def _trim_unsupported(answer: str, claims: list[str]) -> str | None:
+    """Answer minus the sentences the judge flagged, plus a note; None when the
+    flagged claims can't be located or nothing substantial would remain."""
+    if not claims:
+        return None
+    sentences = [s for s in _SENTENCE_SPLIT_RE.split(answer.strip()) if s.strip()]
+    claim_words = [_words(c) for c in claims if c.strip()]
+
+    kept: list[str] = []
+    removed = 0
+    for sentence in sentences:
+        sw = _words(sentence)
+        flagged = bool(sw) and any(
+            cw and len(sw & cw) / min(len(sw), len(cw)) >= _CLAIM_MATCH_THRESHOLD
+            for cw in claim_words
+        )
+        if flagged:
+            removed += 1
+        else:
+            kept.append(sentence)
+
+    remaining = " ".join(kept).strip()
+    if removed == 0 or len(remaining) < MIN_TRIMMED_CHARS:
+        return None
+    return remaining + TRIM_NOTE
+
+
 def _judge_once(answer: str, evidence_block: str, llm: "BaseChatModel") -> tuple[bool | None, str]:
     """One judge call. Returns (verdict, raw_reply); verdict is None when the
     call failed or the reply had no parseable `GROUNDED: yes|no` line."""
@@ -163,21 +222,14 @@ def _verify_answer_llm(
     if not is_grounded:
         # Surfaced at WARNING so rejections are visible in deployed logs.
         logger.warning("Verifier rejected answer. Judge reply: %.500r", content)
-    unsupported_match = re.search(r"UNSUPPORTED:\s*(.*)", content, re.IGNORECASE)
-    unsupported_raw = unsupported_match.group(1).strip() if unsupported_match else ""
-    unsupported = (
-        []
-        if not unsupported_raw or unsupported_raw.upper().startswith("NONE")
-        else [c.strip() for c in unsupported_raw.split(",") if c.strip()]
-    )
+    unsupported = _parse_unsupported(content)
 
     if is_grounded:
         verified_answer = answer
     elif abstain_on_failure:
-        verified_answer = (
-            "I cannot provide a verified answer to this question. "
-            "The available evidence does not sufficiently support a response."
-        )
+        # Prefer dropping just the flagged sentences over discarding a mostly
+        # supported answer; abstain only when nothing usable would remain.
+        verified_answer = _trim_unsupported(answer, unsupported) or ABSTAIN_ANSWER
     else:
         verified_answer = answer
 
