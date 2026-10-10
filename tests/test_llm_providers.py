@@ -120,6 +120,49 @@ def test_verifier_falls_back_to_default_provider_when_judge_provider_breaks(monk
     assert isinstance(verifier._get_llm(), ChatGroq)
 
 
+def test_fallback_provider_takes_over_when_primary_call_fails(monkeypatch):
+    from langchain_core.language_models.fake_chat_models import FakeListChatModel
+
+    from procurement_copilot import llm as llm_module
+
+    class _RateLimited(FakeListChatModel):
+        def _call(self, *args, **kwargs):
+            raise RuntimeError("429 Too Many Requests (tokens per day)")
+
+    primary = _RateLimited(responses=["unused"])
+    fallback = FakeListChatModel(responses=["answer from gemini"])
+    built = {"groq": primary, "gemini": fallback}
+    monkeypatch.setattr(llm_module, "_get_primary_llm", lambda p=None: built[(p or "groq")])
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "gemini")
+
+    llm = get_llm()
+
+    assert llm.invoke("hi").content == "answer from gemini"
+
+
+def test_no_fallback_when_unset_returns_plain_primary(monkeypatch):
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+
+    assert isinstance(get_llm(), ChatGroq)
+
+
+def test_broken_fallback_provider_never_breaks_the_primary(monkeypatch):
+    from procurement_copilot import llm as llm_module
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")
+    monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "gemini")
+
+    def _boom():
+        raise ValueError("missing GEMINI_API_KEY")
+
+    monkeypatch.setattr(llm_module, "_gemini_chat", _boom)
+
+    assert isinstance(get_llm(), ChatGroq)
+
+
 def test_get_llm_groq_override_wins_over_cloud_keys(monkeypatch):
     monkeypatch.setenv("LLM_PROVIDER", "groq")
     monkeypatch.setenv("GROQ_API_KEY", "gsk-fake")

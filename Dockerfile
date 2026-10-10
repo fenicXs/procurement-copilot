@@ -35,6 +35,9 @@ COPY data/processed/vector_index_cloud/ data/processed/vector_index/
 # is unusable for an interactive demo. ms-marco-MiniLM-L-6-v2 (~22M params)
 # reranks the same pool in ~4-5s with no loss in top-1 quality (verified).
 ENV LLM_PROVIDER=groq
+# Groq's free tier caps at 200k tokens/day (~30-40 RAG questions). When a Groq
+# call fails (e.g. 429), that call is retried on Gemini. Empty this to disable.
+ENV LLM_FALLBACK_PROVIDER=gemini
 ENV EMBEDDING_PROVIDER=fastembed
 ENV RERANKER_MODEL=cross-encoder/ms-marco-MiniLM-L-6-v2
 

@@ -38,3 +38,4 @@ jobs:
           flags: --memory 8Gi --cpu 2 --concurrency 1 --max-instances 2 --port 8000 --allow-unauthenticated
           env_vars: |
             GROQ_API_KEY=${{ secrets.GROQ_API_KEY }}
+            GEMINI_API_KEY=${{ secrets.GEMINI_API_KEY }}

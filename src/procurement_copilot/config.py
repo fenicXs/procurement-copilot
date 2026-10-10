@@ -39,6 +39,16 @@ class Settings(BaseSettings):
     # LLM_PROVIDER. ---
     VERIFIER_LLM_PROVIDER: str = ""
 
+    # --- Automatic fallback provider: if the primary LLM call fails (e.g. Groq's
+    # free-tier 200k tokens/day cap -> 429), retry that call on this provider.
+    # Empty = no fallback. ---
+    LLM_FALLBACK_PROVIDER: str = ""
+
+    # --- In-memory answer cache (per instance). Fully verified answers to the
+    # same normalized question are replayed with zero LLM calls. 0 = disabled. ---
+    ANSWER_CACHE_TTL_SECONDS: int = 6 * 3600
+    ANSWER_CACHE_MAX_ENTRIES: int = 200
+
     # --- Embedding provider override, independent of LLM_PROVIDER: lets a
     # deployment use a hosted LLM (e.g. "groq") for generation while using
     # free CPU-only "fastembed" embeddings — no GPU, no API key needed for

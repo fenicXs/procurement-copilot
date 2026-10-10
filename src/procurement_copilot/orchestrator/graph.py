@@ -576,16 +576,37 @@ def run_query(
     db_path: Path | None = None,
     kg_path: Path | None = None,
     session_id: str | None = None,
+    use_cache: bool = False,
 ) -> CopilotResponse:
     """Run a question through the full orchestrator pipeline.
 
     This is the main entry point for the copilot. LangFuse tracing is
     attached per-call (not module-global) so concurrent requests don't bleed
     into each other's traces; it's a no-op when LangFuse keys aren't set.
+
+    `use_cache` replays a previously verified answer to the same normalized
+    question with zero LLM calls (see answer_cache). Off by default so eval
+    runs and tests always exercise the real pipeline; the API turns it on.
     """
+    from procurement_copilot import answer_cache
     from procurement_copilot.audit_log import log_query
     from procurement_copilot.observability import flush_and_get_trace_url, get_langfuse_handler
     from procurement_copilot.rag.answer import ABSTAIN_MESSAGE
+
+    if use_cache:
+        cached = answer_cache.get(question)
+        if cached is not None:
+            logger.info("Answer cache hit.")
+            log_query(
+                question=question,
+                intent=cached.intent,
+                is_verified=cached.is_verified,
+                abstained=False,
+                citation_chunk_ids=[c["chunk_id"] for c in cached.citations],
+                session_id=session_id,
+            )
+            cached.question = question
+            return cached  # type: ignore[no-any-return]
 
     app = build_graph(index_dir=index_dir, db_path=db_path, kg_path=kg_path)
 
@@ -617,7 +638,7 @@ def run_query(
         session_id=session_id,
     )
 
-    return CopilotResponse(
+    response = CopilotResponse(
         question=question,
         intent=final_state.get("intent", ""),
         answer=final_state.get("final_answer", ""),
@@ -628,3 +649,7 @@ def run_query(
         contexts=contexts,
         error=final_state.get("error"),
     )
+    # Only fully verified, non-abstained, error-free answers are replayable.
+    if use_cache and response.is_verified and not abstained and not response.error:
+        answer_cache.put(question, response)
+    return response

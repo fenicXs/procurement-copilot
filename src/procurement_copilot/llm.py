@@ -12,6 +12,7 @@ from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.embeddings import Embeddings
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.runnables import Runnable
 
 from procurement_copilot.config import settings
 
@@ -108,7 +109,31 @@ def _gemini_chat() -> BaseChatModel:
     )
 
 
-def get_llm(provider_override: str | None = None) -> BaseChatModel | None:
+def get_llm(provider_override: str | None = None) -> Runnable | BaseChatModel | None:
+    """Best available chat model, wrapped with an automatic fallback provider.
+
+    When LLM_FALLBACK_PROVIDER is set (e.g. "gemini"), any call that fails on the
+    primary provider — notably a free-tier 429 (Groq's 200k tokens/day cap) — is
+    retried once on the fallback. Disabled when unset, so tests and local runs
+    are unchanged.
+    """
+    primary = _get_primary_llm(provider_override)
+    fallback_name = (_get_key("LLM_FALLBACK_PROVIDER") or settings.LLM_FALLBACK_PROVIDER).lower()
+    resolved = (provider_override or _get_key("LLM_PROVIDER") or settings.LLM_PROVIDER).lower()
+    if primary is None or not fallback_name or fallback_name == resolved:
+        return primary
+
+    try:
+        fallback = _get_primary_llm(fallback_name)
+    except Exception:  # missing/invalid fallback key must never break the primary path
+        logger.warning("Fallback provider %r unavailable — running without it.", fallback_name)
+        return primary
+    if fallback is None:
+        return primary
+    return primary.with_fallbacks([fallback], exception_key=None)
+
+
+def _get_primary_llm(provider_override: str | None = None) -> BaseChatModel | None:
     """Get the best available chat model.
 
     Fallback chain: OpenAI → Anthropic → Bytez → None.

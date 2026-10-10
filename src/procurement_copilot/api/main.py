@@ -80,6 +80,7 @@ async def query(req: QueryRequest, request: Request) -> QueryResponse:
             db_path=settings.DB_PATH,
             kg_path=settings.KG_PATH,
             session_id=str(uuid.uuid4()),
+            use_cache=True,
         )
         return QueryResponse(**asdict(result))
     except Exception as exc:
