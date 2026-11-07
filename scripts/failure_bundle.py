@@ -23,13 +23,11 @@ def load_jsonl(path: Path) -> list[dict]:
 def keyword_hits(keywords: list[str], contexts: list[str], answer: str) -> dict:
     blob = "\n".join(contexts).lower()
     ans = answer.lower()
-    return {
-        k: {"in_evidence": k.lower() in blob, "in_answer": k.lower() in ans} for k in keywords
-    }
+    return {k: {"in_evidence": k.lower() in blob, "in_answer": k.lower() in ans} for k in keywords}
 
 
 def section_mentions(question: str, corpus: list[dict]) -> list[str]:
-    """Chunk ids in the FAR corpus whose text contains a FAR section number named in the question."""
+    """Corpus chunk ids that start with a FAR section number named in the question."""
     out: list[str] = []
     for num in re.findall(r"\b\d{1,2}\.\d{3}(?:-\d+)?\b", question):
         for c in corpus:
@@ -85,7 +83,9 @@ def main() -> None:
     ap.add_argument("--out", type=Path, default=ROOT / "eval/results/failure_analysis")
     args = ap.parse_args()
 
-    judged = {j["id"]: j for j in json.loads(args.judge.read_text(encoding="utf-8"))["per_question"]}
+    judged = {
+        j["id"]: j for j in json.loads(args.judge.read_text(encoding="utf-8"))["per_question"]
+    }
     rows = {r["question_id"]: r for r in json.loads(args.rows.read_text(encoding="utf-8"))}
     gold = {g["id"]: g for g in load_jsonl(args.gold)}
     corpus = load_jsonl(args.corpus) if args.corpus.exists() else []

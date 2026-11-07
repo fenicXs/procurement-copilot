@@ -82,3 +82,23 @@ Conclusion: the "judge cannot check citations" hypothesis is **not supported**; 
 
 - First held-out run had 3 pipeline errors (Groq daily-token 429; the Gemini fallback did not rescue them, likely Gemini per-minute limits in a burst, unconfirmed). Re-run succeeded.
 - Held-out failures: heldout_sql_006 is a **real SQL bug** ("NASA" not mapped to "National Aeronautics and Space Administration", so the query returned Humana); heldout_rag_005 partial answer on 42.302 (retrieval); heldout_sql_003/005 have correct counts (2,261 / 614) but the judge says unsupported (single-number evidence, plus an invented gloss in sql_003); graph 0/2 and mixed 0/1 unsupported.
+
+### Step 4: F3 router + F6 SQL prompt (verified locally, uncommitted)
+- Dev rerun (clean, no errors): 24/42 vs 25/42 baseline (7 gained, 8 lost) -> within the ~±8-flip run-to-run variance; routing 42/42 (was 41); graph_004 fixed. Held-out: 8/15 -> 10/15, no losses; heldout_sql_006 fixed by the NASA example/abbreviation map.
+- Lesson: single full-set runs cannot detect +1/+2 gains. Use targeted replays of the affected ids, and full runs only for regression checks.
+
+### Step 5: F1 graph retriever (verified locally, uncommitted)
+- `graph/query.py`: `find_related(..., relation=)`; `graph/answer.py`: `_extract_query_relations` + relation-first retrieval, unscoped relation sample only as a fallback when nothing is entity-scoped. First version always added the sample and regressed graph_007; fixed by making it fallback-only.
+- Replay of the 12 graph questions (10 dev + 2 held-out): 4/12 -> **10/12** correct. graph_003/009 (abstain on "no triples") and graph_005, heldout_graph_001/002 now answer with p_grounded 0.63-1.00. Still abstaining: graph_006, graph_007 (verifier, F2).
+- 23 tests in tests/test_graph.py pass (7 new).
+
+### Quota exhaustion (2026-11-07, discovered during step 5)
+- Gemini `gemini-3.5-flash-lite` free tier: **500 requests/day** (used up; resets in ~12h43m). Groq `gpt-oss-20b`: 200k tokens/day (nearly used). With both exhausted, `with_fallbacks` re-raises the first (Groq) error, which is why the eval hit "429 Groq" errors even though Gemini was configured. Both keys are probably shared with the deployed service (not verifiable from here), so eval runs may have consumed its free quota too.
+- Consequence: no more LLM-based verification until quotas reset. Everything below was verified retrieval-only (no LLM).
+
+### Step 6: F4 retrieval (partial; retrieval-only verification)
+- `rag/retriever.py`: (a) definition pin: "What is/are the X ...?" pins the chunk containing "X means ..." (rag_012: `far_chunk_00179` now rank 1); (b) continuation chunk: when the query names a FAR section, the chunk that continues it is added (heldout_rag_005: 42.302 list chunk now rank 2). Both read the corpus lazily and cache; no extra resident memory.
+- Retrieval probe (LLM-free) on 6 known-failure questions: expected text in top-5 went **2/6 -> 4/6**. Not fixed by these generic mechanisms: rag_013 (Part 43), rag_009 (6.302-2..-7) - they need topic/query expansion, which I deliberately did not hand-code to avoid tuning to the gold set.
+- Side effect check (26 FAR questions): top-5 changed for 7; in each only the lowest-ranked chunk was swapped for a continuation/definition chunk. A first version cut the definition term at "for" and mis-pinned "termination" for rag_015; fixed and covered by a test.
+- Answer-level effect NOT yet measured (needs LLM quota).
+- Tests: 27 in tests/test_rag.py pass.
