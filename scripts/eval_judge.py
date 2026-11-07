@@ -60,6 +60,7 @@ MATCH_P = 0.5
 SQL_EVIDENCE_ROWS = 20  # what the SQL narration step sees
 MAX_EVIDENCE_CHARS = 12000
 JUDGE_WORKERS = 4
+RATE_LIMIT_RETRIES = 3  # generation retries (70s apart) when a provider answers HTTP 429
 
 ABSTAIN_PREFIXES = (
     "I don't have sufficiently grounded information",
@@ -111,8 +112,35 @@ def build_questions(has_reference: bool) -> dict:
     return qs
 
 
-def build_state(row: dict) -> dict:
-    evidence = "\n".join(c for c in row["contexts"] if c)[:MAX_EVIDENCE_CHARS]
+def _triple_plain_form(arrow_line: str) -> str | None:
+    """'S --[rel]--> O' -> 'S rel O' (the pipeline emits both forms for every triple)."""
+    head, sep, obj = arrow_line.partition("]--> ")
+    subj, sep2, rel = head.partition(" --[")
+    return f"{subj} {rel} {obj}" if sep and sep2 else None
+
+
+def numbered_evidence(contexts: list[str]) -> str:
+    """Label each evidence item with the 1-based index the generator saw, so the judge can
+    check `[n]` citations in the answer. The plain-text twin of each graph triple is omitted
+    (it duplicates the arrow form); the remaining labels keep their original numbers."""
+    plain_twins = {
+        twin for c in contexts if (twin := _triple_plain_form(c)) is not None and " --[" in c
+    }
+    lines = []
+    for i, c in enumerate(contexts, 1):
+        if not c or c in plain_twins:
+            continue
+        lines.append(f"[{i}] {c}")
+    return "\n".join(lines)
+
+
+def build_state(row: dict, numbered: bool = False) -> dict:
+    """numbered=False is the baseline format (comparable with the 24/42 run). numbered=True
+    labels items so `[n]` citations resolve; tested 2026-11-07 and it did not help (23/42)."""
+    if numbered:
+        evidence = numbered_evidence(row["contexts"])[:MAX_EVIDENCE_CHARS]
+    else:
+        evidence = "\n".join(c for c in row["contexts"] if c)[:MAX_EVIDENCE_CHARS]
     state = {"question": row["question"], "evidence": evidence, "answer": row["answer"]}
     if row.get("reference"):
         state["reference_answer"] = row["reference"]
@@ -231,15 +259,21 @@ def generate_rows(questions: list[dict], args: argparse.Namespace, checkpoint: P
     from scripts.run_eval import collect_eval_rows
 
     done: dict[str, dict] = {}
-    if checkpoint.exists() and not args.regenerate:
+    if checkpoint.exists():  # shared across gold files; --regenerate only redoes this run's ids
         done = {r["question_id"]: r for r in json.loads(checkpoint.read_text(encoding="utf-8"))}
-        logger.info("Resuming: %d/%d questions already generated.", len(done), len(questions))
+        logger.info("Checkpoint holds %d questions.", len(done))
 
     for q in questions:
         qid = q["id"]
-        if qid in done and not done[qid].get("error"):
+        if qid in done and not done[qid].get("error") and not args.regenerate:
             continue
         row = asdict(collect_eval_rows([q], args.index_dir, args.db_path, args.kg_path)[0])
+        for attempt in range(RATE_LIMIT_RETRIES):  # 429s are quota, not answer quality
+            if "429" not in (row.get("error") or ""):
+                break
+            logger.warning("%s hit a rate limit; waiting %ds (retry %d)", qid, 70, attempt + 1)
+            time.sleep(70)
+            row = asdict(collect_eval_rows([q], args.index_dir, args.db_path, args.kg_path)[0])
         done[qid] = row
         checkpoint.parent.mkdir(parents=True, exist_ok=True)
         checkpoint.write_text(json.dumps(list(done.values()), indent=2), encoding="utf-8")
@@ -268,14 +302,21 @@ def with_full_sql_evidence(row: dict, db_path: Path | None) -> dict:
 
 
 def judge_rows(
-    rows: list[dict], base_url: str, api_key: str, db_path: Path | None = None
+    rows: list[dict],
+    base_url: str,
+    api_key: str,
+    db_path: Path | None = None,
+    numbered: bool = False,
 ) -> list[dict]:
     def one(row: dict) -> dict:
         if row.get("error") or not row["answer"].strip() or is_abstained(row["answer"]):
             return score_row(row, None)  # nothing to judge
         row = with_full_sql_evidence(row, db_path)
         verdicts = post_verdicts(
-            build_state(row), build_questions(bool(row.get("reference"))), base_url, api_key
+            build_state(row, numbered),
+            build_questions(bool(row.get("reference"))),
+            base_url,
+            api_key,
         )["verdicts"]
         return score_row(row, verdicts)
 
@@ -326,8 +367,23 @@ def main() -> None:
     configure_environment()
     parser = argparse.ArgumentParser(description="Independent-judge evaluation")
     parser.add_argument(
-        "--questions", type=Path, default=_PROJECT_ROOT / "eval" / "gold_questions.jsonl"
+        "--questions",
+        "--gold",
+        type=Path,
+        default=_PROJECT_ROOT / "eval" / "gold_questions.jsonl",
     )
+    parser.add_argument(
+        "--judge-only",
+        action="store_true",
+        help="skip generation; re-judge the answers already in the checkpoint",
+    )
+    parser.add_argument(
+        "--numbered-evidence",
+        action="store_true",
+        help="label evidence items [n] and drop duplicate graph triples (experimental; "
+        "did not improve scores)",
+    )
+    parser.add_argument("--tag", default="", help="label stored in the results file and its name")
     parser.add_argument("--results-dir", type=Path, default=_PROJECT_ROOT / "eval" / "results")
     parser.add_argument(
         "--index-dir", type=Path, default=None, help="default: settings.VECTOR_INDEX_DIR"
@@ -359,16 +415,29 @@ def main() -> None:
         questions = questions[: args.limit]
     logger.info("Evaluating %d questions.", len(questions))
 
-    rows = generate_rows(questions, args, args.results_dir / "_judge_rows.json")
-    scored = judge_rows(rows, settings.RC_BASE_URL, settings.RC_API_KEY, args.db_path)
+    checkpoint = args.results_dir / "_judge_rows.json"
+    if args.judge_only:
+        saved = {r["question_id"]: r for r in json.loads(checkpoint.read_text(encoding="utf-8"))}
+        rows = [saved[q["id"]] for q in questions if q["id"] in saved]
+        logger.info("Judge-only: %d/%d answers from checkpoint.", len(rows), len(questions))
+    else:
+        rows = generate_rows(questions, args, checkpoint)
+    # The gold file is the source of truth for references (the checkpoint may hold older text).
+    gold_ref = {q["id"]: q.get("reference") for q in questions}
+    rows = [{**r, "reference": gold_ref.get(r["question_id"], r.get("reference"))} for r in rows]
+    scored = judge_rows(
+        rows, settings.RC_BASE_URL, settings.RC_API_KEY, args.db_path, args.numbered_evidence
+    )
     summary = summarize(scored)
 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-    out = args.results_dir / f"judge_{stamp}.json"
+    out = args.results_dir / f"judge_{stamp}{'_' + args.tag if args.tag else ''}.json"
     out.write_text(
         json.dumps(
             {
                 "timestamp": stamp,
+                "tag": args.tag,
+                "evidence_format": "numbered-v2" if args.numbered_evidence else "baseline",
                 "judge": "ASU RC Verdicts API (jeffan-31b-1710)",
                 "generator": (
                     f"{os.environ['LLM_PROVIDER']} + fallback "

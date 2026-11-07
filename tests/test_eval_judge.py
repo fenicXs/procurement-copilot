@@ -90,6 +90,32 @@ def test_questions_and_state_payloads() -> None:
     assert "reference_answer" not in ej.build_state(_row())
 
 
+def test_evidence_is_numbered_so_citations_can_be_checked() -> None:
+    state = ej.build_state(_row(contexts=["first chunk", "second chunk"]), numbered=True)
+    assert state["evidence"] == "[1] first chunk\n[2] second chunk"
+
+
+def test_graph_triple_twins_are_dropped_but_numbers_are_preserved() -> None:
+    ctx = [
+        "a chunk",
+        "part 15 --[mentions]--> negotiation",
+        "part 15 mentions negotiation",  # plain twin of the line above
+        "part 14 --[references]--> part 17",
+        "part 14 references part 17",
+    ]
+    lines = ej.build_state(_row(contexts=ctx), numbered=True)["evidence"].splitlines()
+    assert lines == [
+        "[1] a chunk",
+        "[2] part 15 --[mentions]--> negotiation",
+        "[4] part 14 --[references]--> part 17",
+    ]
+
+
+def test_default_evidence_is_the_baseline_unnumbered_join() -> None:
+    state = ej.build_state(_row(contexts=["x", "", "y"]))
+    assert state["evidence"] == "x\ny"
+
+
 def test_summary_counts_by_overall_and_category() -> None:
     scored = [
         ej.score_row(_row(question_id="a"), _verdicts(0.95)),
