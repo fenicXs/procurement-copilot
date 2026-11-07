@@ -88,6 +88,13 @@ class Settings(BaseSettings):
     FASTEMBED_RERANKER2_MODEL: str = ""
     RERANK_SHORTLIST: int = 25
 
+    # --- ASU Research Computing OpenAI-compatible gateway. Used only by the
+    # offline evaluation script (scripts/eval_judge.py) for its Verdicts-API
+    # judge; the deployed app does not call it. Key is a class-account credential
+    # — keep it out of the deploy config. ---
+    RC_BASE_URL: str = ""
+    RC_API_KEY: str = ""
+
     # --- Evaluation (RAGAS) ---
     # Forces the local, free judge regardless of which provider answers
     # queries, so eval cost stays zero even if a cloud key is configured.
