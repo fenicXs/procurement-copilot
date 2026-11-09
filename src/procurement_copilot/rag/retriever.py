@@ -15,6 +15,7 @@ import logging
 import os
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
@@ -194,22 +195,95 @@ def _load_section_index() -> dict[str, list[RetrievedChunk]]:
     return index
 
 
+def _iter_corpus():  # type: ignore[no-untyped-def]
+    """Yield the raw FAR chunk records (empty when the corpus file is absent)."""
+    path = Path(settings.DATA_DIR) / "processed" / "far_chunks.jsonl"
+    if not path.is_file():
+        return
+    with path.open(encoding="utf-8") as fh:
+        for line in fh:
+            yield json.loads(line)
+
+
+def _as_chunk(rec: dict[str, Any]) -> RetrievedChunk:
+    return RetrievedChunk(
+        chunk_id=rec.get("chunk_id", ""),
+        text=rec.get("text", ""),
+        page_start=rec.get("page_start", 0),
+        page_end=rec.get("page_end", 0),
+        section_heading=rec.get("section_heading", ""),
+        source_url=rec.get("source_url", ""),
+        score=0.0,
+    )
+
+
+@lru_cache(maxsize=256)
+def _next_chunk(chunk_id: str) -> RetrievedChunk | None:
+    """The chunk that continues *chunk_id* (a section's list/paragraphs often run on into
+    the next chunk), unless that chunk opens a new section."""
+    take_next = False
+    for rec in _iter_corpus():
+        if take_next:
+            text = rec.get("text", "")
+            return None if _HEADING_RE.match(text.lstrip()) else _as_chunk(rec)
+        take_next = rec.get("chunk_id") == chunk_id
+    return None
+
+
 def _pinned_chunks(query: str) -> list[RetrievedChunk]:
-    """Chunks that open the FAR section(s) the query names, at most MAX_PINNED."""
+    """Chunks that open the FAR section(s) the query names (at most MAX_PINNED), plus the
+    chunk that continues each of them."""
     global _section_index
     sections = list(dict.fromkeys(_QUERY_SECTION_RE.findall(query)))
     if not sections:
         return []
     if _section_index is None:
         _section_index = _load_section_index()
-    pinned: list[RetrievedChunk] = []
+    openers: list[RetrievedChunk] = []
     for sec in sections:
-        pinned.extend(_section_index.get(sec, [])[:1])
-    return pinned[:MAX_PINNED]
+        openers.extend(_section_index.get(sec, [])[:1])
+    openers = openers[:MAX_PINNED]
+    continuations = [c for o in openers if (c := _next_chunk(o.chunk_id)) is not None]
+    return openers + continuations
+
+
+# --- Definition pinning ------------------------------------------------------
+# "What is the micro-purchase threshold under the FAR?" asks for a defined term, but
+# the chunk that says "Micro-purchase threshold means $15,000" can sit outside the
+# reranked top-k among dozens of chunks that merely use the term.
+
+_DEFINITION_Q_RE = re.compile(
+    r"^\s*what\s+(?:is|are)\s+(?:the\s+|an?\s+)?(?P<term>[a-z][a-z\- ]{2,60}?)"
+    r"(?:\s+(?:under|in|according|per|within)\b.*)?\s*\??\s*$",
+    re.IGNORECASE,
+)
+
+
+@lru_cache(maxsize=256)
+def _definition_chunk(term: str) -> RetrievedChunk | None:
+    """First FAR chunk (Part 2 comes first) that defines *term* as '<term> means ...'."""
+    pattern = re.compile(
+        r"(?<![\w-])" + re.escape(term).replace(r"\ ", r"\s+") + r"\s+means\b", re.IGNORECASE
+    )
+    for rec in _iter_corpus():
+        if pattern.search(rec.get("text", "")):
+            return _as_chunk(rec)
+    return None
+
+
+def _definition_pin(query: str) -> list[RetrievedChunk]:
+    m = _DEFINITION_Q_RE.match(query)
+    if not m:
+        return []
+    term = " ".join(m.group("term").split()).lower()
+    if len(term.split()) > 5:
+        return []
+    chunk = _definition_chunk(term)
+    return [chunk] if chunk else []
 
 
 def _apply_pins(query: str, ranked: list[RetrievedChunk]) -> list[RetrievedChunk]:
-    pinned = _pinned_chunks(query)
+    pinned = _pinned_chunks(query) or _definition_pin(query)
     if not pinned:
         return ranked
     pinned_ids = {c.chunk_id for c in pinned}

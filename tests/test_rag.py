@@ -125,6 +125,10 @@ class TestSectionPinning:
             "_section_index",
             {"6.302-1": [_make_chunk("sec", "6.302-1 Only one source")]},
         )
+        # hermetic: never read the real corpus file in these unit tests
+        monkeypatch.setattr(retriever, "_iter_corpus", lambda: iter(()))
+        retriever._next_chunk.cache_clear()
+        retriever._definition_chunk.cache_clear()
 
     def test_query_naming_a_section_pins_its_chunk_first(
         self, monkeypatch: pytest.MonkeyPatch
@@ -146,6 +150,71 @@ class TestSectionPinning:
         assert (
             retriever._apply_pins("What is the simplified acquisition threshold?", ranked) == ranked
         )
+
+    def test_definition_question_pins_the_chunk_that_defines_the_term(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        corpus = [
+            {"chunk_id": "use", "text": "Purchases at or below the micro-purchase threshold may"},
+            {"chunk_id": "def", "text": "Micro-purchase threshold means $15,000, except for"},
+        ]
+        monkeypatch.setattr(retriever, "_iter_corpus", lambda: iter(corpus))
+        ranked = [_make_chunk("a", "x"), _make_chunk("use", "y")]
+        out = retriever._apply_pins("What is the micro-purchase threshold under the FAR?", ranked)
+        assert [c.chunk_id for c in out] == ["def", "a", "use"]
+
+    def test_multiword_terms_containing_for_are_not_cut_short(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        corpus = [{"chunk_id": "junk", "text": "Termination means the end of the contract"}]
+        monkeypatch.setattr(retriever, "_iter_corpus", lambda: iter(corpus))
+        ranked = [_make_chunk("a", "x")]
+        q = "What are the termination for convenience procedures?"
+        assert retriever._apply_pins(q, ranked) == ranked
+
+    def test_non_definition_question_is_not_pinned(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        corpus = [{"chunk_id": "def", "text": "Micro-purchase threshold means $15,000"}]
+        monkeypatch.setattr(retriever, "_iter_corpus", lambda: iter(corpus))
+        ranked = [_make_chunk("a", "x")]
+        assert retriever._apply_pins("Explain the micro-purchase threshold", ranked) == ranked
+
+    def test_named_section_also_pulls_in_the_chunk_that_continues_it(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        corpus = [
+            {"chunk_id": "sec", "text": "6.302-1 Only one source. (a) first items"},
+            {"chunk_id": "cont", "text": "(b) the rest of the list continues here"},
+        ]
+        monkeypatch.setattr(retriever, "_iter_corpus", lambda: iter(corpus))
+        ranked = [_make_chunk("a", "x")]
+        out = retriever._apply_pins("What does FAR 6.302-1 say?", ranked)
+        assert [c.chunk_id for c in out] == ["sec", "cont", "a"]
+
+    def test_continuation_is_skipped_when_next_chunk_opens_a_new_section(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.rag import retriever
+
+        self._install_index(monkeypatch)
+        corpus = [
+            {"chunk_id": "sec", "text": "6.302-1 Only one source. (a) all of it"},
+            {"chunk_id": "next", "text": "6.302-2 Unusual and compelling urgency. (a)"},
+        ]
+        monkeypatch.setattr(retriever, "_iter_corpus", lambda: iter(corpus))
+        out = retriever._apply_pins("What does FAR 6.302-1 say?", [_make_chunk("a", "x")])
+        assert [c.chunk_id for c in out] == ["sec", "a"]
 
     def test_unknown_section_is_ignored(self, monkeypatch: pytest.MonkeyPatch) -> None:
         from procurement_copilot.rag import retriever
