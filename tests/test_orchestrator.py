@@ -409,3 +409,26 @@ class TestSummarizeSQLResultLLM:
 
         assert summary == "The query returned no results."
         assert stub.calls == []
+
+
+def test_collect_evidence_graph_triples_carry_source_chunk_id():
+    from procurement_copilot.orchestrator.graph import _collect_evidence
+
+    state = {
+        "graph_triples": [
+            {
+                "subject": "10.002",
+                "relation": "references",
+                "object": "competition",
+                "chunk_id": "far_chunk_00033",
+            },
+            {"subject": "a", "relation": "mentions", "object": "b"},  # no chunk id: unchanged
+        ]
+    }
+
+    evidence, has_graph = _collect_evidence(state)
+
+    assert has_graph
+    assert "10.002 --[references]--> competition [far_chunk_00033]" in evidence
+    assert "10.002 references competition [far_chunk_00033]" in evidence
+    assert "a --[mentions]--> b" in evidence

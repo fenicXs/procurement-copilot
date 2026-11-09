@@ -8,6 +8,7 @@ import pytest
 from procurement_copilot.graph.answer import (
     GraphAnswer,
     _extract_query_entities,
+    _extract_query_relations,
     generate_graph_answer,
 )
 from procurement_copilot.graph.query import (
@@ -101,6 +102,13 @@ class TestFindRelated:
         assert any(t.object == "sole source" for t in results)
 
 
+class TestFindRelatedByRelation:
+    def test_relation_filter_scopes_the_entity_lookup(self, tmp_kg: Path) -> None:
+        results = find_related("sole source", kg_path=tmp_kg, relation="authorizes")
+        assert results and all(t.relation == "authorizes" for t in results)
+        assert find_related("sole source", kg_path=tmp_kg, relation="defines") == []
+
+
 class TestFindByRelation:
     def test_finds_references(self, tmp_kg: Path) -> None:
         results = find_by_relation("references", kg_path=tmp_kg)
@@ -151,7 +159,56 @@ class TestExtractQueryEntities:
         assert any("sole" in e for e in entities)
 
 
+class TestExtractQueryRelations:
+    @pytest.mark.parametrize(
+        "question, expected",
+        [
+            ("What graph triples involve the authorizes relationship?", ["authorizes"]),
+            ("Which FAR sections reference each other according to the graph?", ["references"]),
+            ("What does FAR 9.104 require or define?", ["requires", "defines"]),
+            ("Show all relationships for FAR section 15.304 in the graph", []),
+        ],
+    )
+    def test_detects_named_relation_types(self, question: str, expected: list[str]) -> None:
+        assert _extract_query_relations(question) == expected
+
+
 class TestGenerateGraphAnswer:
+    def test_relation_only_question_gets_triples_of_that_type(self, tmp_kg: Path) -> None:
+        result = generate_graph_answer(
+            "What graph triples involve the authorizes relationship?", kg_path=tmp_kg
+        )
+        assert result.triples_used
+        assert {t.relation for t in result.triples_used[:2]} == {"authorizes"}
+
+    def test_relation_sample_is_only_requested_when_nothing_is_entity_scoped(
+        self, tmp_kg: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        from procurement_copilot.graph import answer as answer_mod
+
+        calls: list[str] = []
+        real = answer_mod.find_by_relation
+        monkeypatch.setattr(
+            answer_mod,
+            "find_by_relation",
+            lambda rel, kg_path=None, max_results=50: calls.append(rel)
+            or real(rel, kg_path, max_results),
+        )
+        generate_graph_answer("Which sections reference 15.304?", kg_path=tmp_kg)
+        assert calls == []  # 15.304 has scoped 'references' triples -> no unscoped sample
+
+        generate_graph_answer("Which FAR sections reference each other?", kg_path=tmp_kg)
+        assert calls == ["references"]  # nothing entity-scoped -> fallback sample used
+
+    def test_generic_reference_question_falls_back_to_the_relation_sample(
+        self, tmp_kg: Path
+    ) -> None:
+        result = generate_graph_answer(
+            "Which FAR sections reference each other according to the graph?", kg_path=tmp_kg
+        )
+        assert result.triples_used
+        assert result.triples_used[0].relation == "references"
+
     def test_fallback_without_llm(self, tmp_kg: Path) -> None:
         result = generate_graph_answer("What relates to sole source contracting?", kg_path=tmp_kg)
         assert isinstance(result, GraphAnswer)

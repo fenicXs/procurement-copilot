@@ -33,17 +33,22 @@ def find_related(
     entity: str,
     kg_path: Path | None = None,
     max_results: int = 50,
+    relation: str | None = None,
 ) -> list[Triple]:
-    """Find all triples where *entity* appears as subject or object."""
+    """Find triples where *entity* appears as subject or object (optionally only those
+    with the given *relation* type)."""
     con = _load_kg(kg_path)
     entity_norm = entity.strip().lower().replace("-", " ")
 
-    rows = con.execute(
+    sql = (
         "SELECT subject, relation, object, chunk_id FROM triples "
-        "WHERE subject LIKE ? OR object LIKE ? "
-        "LIMIT ?",
-        [f"%{entity_norm}%", f"%{entity_norm}%", max_results],
-    ).fetchall()
+        "WHERE (subject LIKE ? OR object LIKE ?)"
+    )
+    params: list = [f"%{entity_norm}%", f"%{entity_norm}%"]
+    if relation:
+        sql += " AND relation = ?"
+        params.append(relation.lower())
+    rows = con.execute(sql + " LIMIT ?", [*params, max_results]).fetchall()
     con.close()
 
     return [Triple(subject=r[0], relation=r[1], object=r[2], chunk_id=r[3]) for r in rows]

@@ -149,7 +149,12 @@ def graph_answer_node(
         return {
             "graph_answer": result.answer,
             "graph_triples": [
-                {"subject": t.subject, "relation": t.relation, "object": t.object}
+                {
+                    "subject": t.subject,
+                    "relation": t.relation,
+                    "object": t.object,
+                    "chunk_id": t.chunk_id,
+                }
                 for t in result.triples_used
             ],
             "graph_chunk_ids": result.provenance_chunk_ids,
@@ -173,8 +178,13 @@ def _collect_evidence(state: OrchestratorState) -> tuple[list[str], bool]:
     for triple in state.get("graph_triples", []):
         has_graph_evidence = True
         # Include both the arrow notation and plain text for better keyword matching
-        evidence.append(f"{triple['subject']} --[{triple['relation']}]--> {triple['object']}")
-        evidence.append(f"{triple['subject']} {triple['relation']} {triple['object']}")
+        # The graph prompt shows each triple's source chunk id and the answer cites it, so the
+        # verifier/judge must see the same id or every citation looks invented.
+        source = f" [{triple['chunk_id']}]" if triple.get("chunk_id") else ""
+        evidence.append(
+            f"{triple['subject']} --[{triple['relation']}]--> {triple['object']}{source}"
+        )
+        evidence.append(f"{triple['subject']} {triple['relation']} {triple['object']}{source}")
     return evidence, has_graph_evidence
 
 

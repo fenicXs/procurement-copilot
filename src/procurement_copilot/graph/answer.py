@@ -6,6 +6,7 @@ from pathlib import Path
 
 from procurement_copilot.graph.query import (
     Triple,
+    find_by_relation,
     find_related,
     get_provenance_chunk_ids,
     multi_hop,
@@ -112,6 +113,32 @@ def _extract_query_entities(question: str) -> list[str]:
     return entities[:5]
 
 
+# Words in a question that name a relation type in the KG (relation column values).
+_RELATION_PATTERNS: list[tuple[str, str]] = [
+    (r"\bauthori[sz]\w*", "authorizes"),
+    (r"\b(?:cross[- ]?)?refer\w*", "references"),
+    (r"\brequire\w*", "requires"),
+    (r"\bmention\w*", "mentions"),
+    (r"\bexception\w*", "exception_to"),
+    (r"\bdefin(?:e|es|ed|ition)\b", "defines"),
+    (r"\bprohibit\w*", "prohibits"),
+    (r"\bapplies? to\b|\bapplicab\w*", "applies_to"),
+    (r"\bdelegat\w*", "delegates_to"),
+]
+
+
+def _extract_query_relations(question: str) -> list[str]:
+    """Relation types the question names (e.g. 'authorizes', 'references'), in order."""
+    import re
+
+    q = question.lower()
+    found: list[str] = []
+    for pattern, relation in _RELATION_PATTERNS:
+        if re.search(pattern, q) and relation not in found:
+            found.append(relation)
+    return found
+
+
 def _get_llm():  # type: ignore[no-untyped-def]
     """Get the best available chat model."""
     from procurement_copilot.llm import get_llm
@@ -137,6 +164,23 @@ def generate_graph_answer(
     # Gather triples from multiple entity lookups + multi-hop
     all_triples: list[Triple] = []
     seen: set[tuple[str, str, str]] = set()
+
+    # When the question names a relation type ("authorizes", "references", ...), gather
+    # triples of that type first: scoped to each entity, then a sample of the relation itself
+    # (so questions with no usable entity, or whose entity matches nothing, still get evidence).
+    relations = _extract_query_relations(question)
+    for relation in relations:
+        scoped = [
+            t for entity in entities for t in find_related(entity, kg_path, 10, relation=relation)
+        ]
+        # An unscoped sample of the relation is only a fallback: when entity-scoped triples
+        # exist, extra unrelated edges of that type would just dilute the evidence.
+        extra = [] if scoped else find_by_relation(relation, kg_path, max_results=15)
+        for t in scoped + extra:
+            key = (t.subject, t.relation, t.object)
+            if key not in seen:
+                seen.add(key)
+                all_triples.append(t)
 
     for entity in entities:
         # Direct lookup
