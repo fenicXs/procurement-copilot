@@ -1,0 +1,308 @@
+{
+  "timestamp": "20261108_001542",
+  "tag": "rc_heldout",
+  "evidence_format": "baseline",
+  "judge": "ASU RC Verdicts API (jeffan-31b-1710)",
+  "generator": "rc + fallback ",
+  "thresholds": {
+    "supported": 0.5,
+    "confident": 0.8,
+    "match": 0.5
+  },
+  "summary": {
+    "overall": {
+      "n": 15,
+      "correct": 11,
+      "correct_high_confidence": 9,
+      "outcomes": {
+        "supported": 11,
+        "unsure": 0,
+        "unsupported": 3,
+        "abstained": 1,
+        "error": 0
+      },
+      "pipeline_verified": 13,
+      "intent_correct": 15,
+      "reference_questions": 15,
+      "reference_correct": 11
+    },
+    "by_category": {
+      "graph": {
+        "n": 2,
+        "correct": 2,
+        "correct_high_confidence": 1,
+        "outcomes": {
+          "supported": 2,
+          "unsure": 0,
+          "unsupported": 0,
+          "abstained": 0,
+          "error": 0
+        },
+        "pipeline_verified": 2,
+        "intent_correct": 2,
+        "reference_questions": 2,
+        "reference_correct": 2
+      },
+      "mixed": {
+        "n": 1,
+        "correct": 0,
+        "correct_high_confidence": 0,
+        "outcomes": {
+          "supported": 0,
+          "unsure": 0,
+          "unsupported": 1,
+          "abstained": 0,
+          "error": 0
+        },
+        "pipeline_verified": 0,
+        "intent_correct": 1,
+        "reference_questions": 1,
+        "reference_correct": 0
+      },
+      "rag": {
+        "n": 6,
+        "correct": 4,
+        "correct_high_confidence": 4,
+        "outcomes": {
+          "supported": 4,
+          "unsure": 0,
+          "unsupported": 1,
+          "abstained": 1,
+          "error": 0
+        },
+        "pipeline_verified": 5,
+        "intent_correct": 6,
+        "reference_questions": 6,
+        "reference_correct": 4
+      },
+      "sql": {
+        "n": 6,
+        "correct": 5,
+        "correct_high_confidence": 4,
+        "outcomes": {
+          "supported": 5,
+          "unsure": 0,
+          "unsupported": 1,
+          "abstained": 0,
+          "error": 0
+        },
+        "pipeline_verified": 6,
+        "intent_correct": 6,
+        "reference_questions": 6,
+        "reference_correct": 5
+      }
+    }
+  },
+  "per_question": [
+    {
+      "id": "heldout_rag_001",
+      "category": "rag",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.8220881816089357,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9476176798067549,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 32004,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_rag_002",
+      "category": "rag",
+      "outcome": "unsupported",
+      "correct": false,
+      "correct_high_confidence": false,
+      "p_grounded": 0.2526678315656039,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9911437711012114,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 34776,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_rag_003",
+      "category": "rag",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9770024840891068,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9998019767550529,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 35594,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_rag_004",
+      "category": "rag",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9899730062605011,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9998783990826412,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 33051,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_rag_005",
+      "category": "rag",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9765234335702675,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9996766402266806,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 22123,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_rag_006",
+      "category": "rag",
+      "outcome": "abstained",
+      "correct": false,
+      "correct_high_confidence": false,
+      "p_grounded": null,
+      "p_answers_question": null,
+      "p_matches_reference": null,
+      "pipeline_verified": false,
+      "intent_correct": true,
+      "latency_ms": 39691,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_sql_001",
+      "category": "sql",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9899241120609276,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 1.0,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 5199,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_sql_002",
+      "category": "sql",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": false,
+      "p_grounded": 0.7401930304292152,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9998631956676756,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 4899,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_sql_003",
+      "category": "sql",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9167227109393548,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 1.0,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 8398,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_sql_004",
+      "category": "sql",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9741607554265016,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 0.9995193393408238,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 6183,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_sql_005",
+      "category": "sql",
+      "outcome": "unsupported",
+      "correct": false,
+      "correct_high_confidence": false,
+      "p_grounded": 0.2984612895675887,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 1.0,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 4673,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_sql_006",
+      "category": "sql",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.9958512924404831,
+      "p_answers_question": 1.0,
+      "p_matches_reference": 1.0,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 6000,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_graph_001",
+      "category": "graph",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": false,
+      "p_grounded": 0.7859185329310047,
+      "p_answers_question": 0.9995814339198738,
+      "p_matches_reference": 0.9963349514910694,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 24766,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_graph_002",
+      "category": "graph",
+      "outcome": "supported",
+      "correct": true,
+      "correct_high_confidence": true,
+      "p_grounded": 0.8824914683452212,
+      "p_answers_question": 0.9981556124399923,
+      "p_matches_reference": 0.9914303860455665,
+      "pipeline_verified": true,
+      "intent_correct": true,
+      "latency_ms": 13430,
+      "has_reference": true
+    },
+    {
+      "id": "heldout_mixed_001",
+      "category": "mixed",
+      "outcome": "unsupported",
+      "correct": false,
+      "correct_high_confidence": false,
+      "p_grounded": 0.025990617014323834,
+      "p_answers_question": 0.11830505034693702,
+      "p_matches_reference": 0.01802484776301796,
+      "pipeline_verified": false,
+      "intent_correct": true,
+      "latency_ms": 75904,
+      "has_reference": true
+    }
+  ]
+}
