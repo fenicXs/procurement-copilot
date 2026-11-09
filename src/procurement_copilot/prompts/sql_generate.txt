@@ -16,6 +16,24 @@ A: SELECT recipient_name, SUM(award_amount) AS total FROM awards
 Q: How many awards did the Department of Defense receive?
 A: SELECT COUNT(*) AS award_count FROM awards WHERE awarding_agency = 'Department of Defense'
 
+Q: What is the largest award from NASA?
+A: SELECT recipient_name, award_amount FROM awards
+   WHERE awarding_agency = 'National Aeronautics and Space Administration'
+   ORDER BY award_amount DESC LIMIT 1
+
+More rules:
+- Always keep every entity the question names as a WHERE filter; never drop it.
+- Agency abbreviations map to the exact `awarding_agency` value, e.g. NASA = 'National
+  Aeronautics and Space Administration', DoD = 'Department of Defense', DOE = 'Department
+  of Energy', HHS = 'Department of Health and Human Services', VA = 'Department of
+  Veterans Affairs', DHS = 'Department of Homeland Security', GSA = 'General Services
+  Administration', USAID = 'Agency for International Development'.
+- Document names such as "FAR" are not data: never filter `description` on words like
+  FAR or on regulation names. Filter only on facts the table can hold (agency, recipient,
+  dates, amounts, award type).
+- The table has no competition or sole-source column; if the question asks about
+  sole-source spending, filter `description ILIKE '%sole source%'` and nothing else.
+
 Note: `awarding_agency` is the government agency that made the award (e.g. "Department
 of Defense"). `recipient_name` is the contractor/company that received it. Do not
 confuse the two — a government agency name belongs in `awarding_agency`, never

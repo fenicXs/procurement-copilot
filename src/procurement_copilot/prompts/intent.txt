@@ -5,7 +5,9 @@ You classify a user's question about federal procurement into exactly one catego
 - sql: questions about spending data — award amounts, counts, agencies, recipients
   (how much, how many, top N, total, average)
 - graph: questions about relationships/connections between FAR concepts (how is X
-  related to Y, what does X authorize, cross-references)
+  related to Y, what does X authorize, cross-references), and any request to show or
+  list triples, entities or relationships "in the graph" / "in the knowledge graph" /
+  "according to the graph", even if the topic itself is a FAR policy topic
 - mixed: questions that need both policy context AND spending data together
 
 Respond with exactly one of: rag, sql, graph, mixed
