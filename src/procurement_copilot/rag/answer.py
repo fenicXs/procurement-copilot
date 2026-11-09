@@ -15,6 +15,9 @@ ABSTAIN_MESSAGE = (
 )
 
 
+EMPTY_ANSWER_ATTEMPTS = 2  # one retry when the LLM returns an empty message
+
+
 @dataclass
 class Citation:
     """A citation reference to a source chunk."""
@@ -114,8 +117,24 @@ def generate_rag_answer(
         HumanMessage(content=f"Context:\n{context}\n\nQuestion: {question}"),
     ]
 
-    response = llm.invoke(messages)
-    answer_text = response.content if isinstance(response.content, str) else str(response.content)
+    # Reasoning models occasionally return an empty message with no error, which no provider
+    # fallback catches. Retry once; if still empty, abstain instead of returning a blank answer.
+    answer_text = ""
+    for _attempt in range(EMPTY_ANSWER_ATTEMPTS):
+        response = llm.invoke(messages)
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        answer_text = content.strip()
+        if answer_text:
+            break
+        logger.warning("RAG LLM returned an empty answer (attempt %d).", _attempt + 1)
+    if not answer_text:
+        return RAGAnswer(
+            question=question,
+            answer=ABSTAIN_MESSAGE,
+            citations=[],
+            retrieved_chunks=chunks,
+            abstained=True,
+        )
 
     return RAGAnswer(
         question=question,

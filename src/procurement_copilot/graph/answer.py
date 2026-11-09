@@ -148,6 +148,24 @@ def _get_llm():  # type: ignore[no-untyped-def]
 
 GRAPH_SYSTEM_PROMPT = load_prompt("graph_answer")
 
+EMPTY_ANSWER_ATTEMPTS = 2  # one retry when the LLM returns an empty message
+
+
+def _structured_summary(all_triples: list[Triple], chunk_ids: list[str]) -> str:
+    """Deterministic, LLM-free summary of the triples, grouped by relation."""
+    by_relation: dict[str, list[Triple]] = {}
+    for t in all_triples:
+        by_relation.setdefault(t.relation, []).append(t)
+
+    parts = [f"Found {len(all_triples)} related triples across {len(chunk_ids)} chunks:\n"]
+    for rel, triples in sorted(by_relation.items()):
+        parts.append(f"\n{rel.upper()}:")
+        for t in triples[:5]:
+            parts.append(f"  - {t.subject} -> {t.object} [{t.chunk_id}]")
+        if len(triples) > 5:
+            parts.append(f"  ... and {len(triples) - 5} more")
+    return "\n".join(parts)
+
 
 def generate_graph_answer(
     question: str,
@@ -221,24 +239,10 @@ def generate_graph_answer(
     llm = _get_llm()
 
     if llm is None:
-        # Structured summary fallback
         logger.warning("No LLM available — returning triple summary.")
-        # Group by relation for readability
-        by_relation: dict[str, list[Triple]] = {}
-        for t in all_triples:
-            by_relation.setdefault(t.relation, []).append(t)
-
-        parts = [f"Found {len(all_triples)} related triples across {len(chunk_ids)} chunks:\n"]
-        for rel, triples in sorted(by_relation.items()):
-            parts.append(f"\n{rel.upper()}:")
-            for t in triples[:5]:
-                parts.append(f"  - {t.subject} -> {t.object} [{t.chunk_id}]")
-            if len(triples) > 5:
-                parts.append(f"  ... and {len(triples) - 5} more")
-
         return GraphAnswer(
             question=question,
-            answer="\n".join(parts),
+            answer=_structured_summary(all_triples, chunk_ids),
             triples_used=all_triples,
             provenance_chunk_ids=chunk_ids,
         )
@@ -251,8 +255,19 @@ def generate_graph_answer(
         HumanMessage(content=f"Knowledge graph triples:\n{triples_text}\n\nQuestion: {question}"),
     ]
 
-    response = llm.invoke(messages)
-    answer_text = response.content if isinstance(response.content, str) else str(response.content)
+    # Reasoning models (e.g. Groq gpt-oss) occasionally return an empty message with no error,
+    # which neither the provider fallback nor the caller treats as a failure. Retry once, then
+    # fall back to the structured summary rather than reporting "no answer".
+    answer_text = ""
+    for _attempt in range(EMPTY_ANSWER_ATTEMPTS):
+        response = llm.invoke(messages)
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        answer_text = content.strip()
+        if answer_text:
+            break
+        logger.warning("Graph LLM returned an empty answer (attempt %d).", _attempt + 1)
+    if not answer_text:
+        answer_text = _structured_summary(all_triples, chunk_ids)
 
     return GraphAnswer(
         question=question,

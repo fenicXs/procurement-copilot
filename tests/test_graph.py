@@ -216,6 +216,31 @@ class TestGenerateGraphAnswer:
         assert len(result.provenance_chunk_ids) > 0
         assert "sole source" in result.answer.lower() or "triples" in result.answer.lower()
 
+    def test_empty_llm_answer_is_retried_then_succeeds(self, tmp_kg: Path) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        replies = iter(["", "A real answer about sole source."])
+        fake = SimpleNamespace(invoke=lambda _m: SimpleNamespace(content=next(replies)))
+        with patch("procurement_copilot.graph.answer._get_llm", return_value=fake):
+            result = generate_graph_answer(
+                "What relates to sole source contracting?", kg_path=tmp_kg
+            )
+        assert result.answer == "A real answer about sole source."
+
+    def test_persistently_empty_llm_answer_falls_back_to_summary(self, tmp_kg: Path) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        fake = SimpleNamespace(invoke=lambda _m: SimpleNamespace(content="   "))
+        with patch("procurement_copilot.graph.answer._get_llm", return_value=fake):
+            result = generate_graph_answer(
+                "What relates to sole source contracting?", kg_path=tmp_kg
+            )
+        assert result.answer.strip()
+        assert "related triples" in result.answer
+        assert result.triples_used
+
     def test_no_results_message(self, tmp_kg: Path) -> None:
         result = generate_graph_answer("Tell me about quantum computing", kg_path=tmp_kg)
         assert isinstance(result, GraphAnswer)

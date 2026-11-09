@@ -73,6 +73,29 @@ class TestGenerateRAGAnswer:
         assert "c1" in result.answer
         assert "approvals" in result.answer.lower()
 
+    def test_empty_llm_answer_is_retried_then_succeeds(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        replies = iter(["", "Approvals are required [c1]."])
+        fake = SimpleNamespace(invoke=lambda _m: SimpleNamespace(content=next(replies)))
+        with patch("procurement_copilot.rag.answer._get_llm", return_value=fake):
+            result = generate_rag_answer("What approvals?", [_make_chunk("c1", "approvals text")])
+        assert result.answer == "Approvals are required [c1]."
+        assert not result.abstained
+
+    def test_persistently_empty_llm_answer_abstains(self) -> None:
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        from procurement_copilot.rag.answer import ABSTAIN_MESSAGE
+
+        fake = SimpleNamespace(invoke=lambda _m: SimpleNamespace(content=""))
+        with patch("procurement_copilot.rag.answer._get_llm", return_value=fake):
+            result = generate_rag_answer("What approvals?", [_make_chunk("c1", "approvals text")])
+        assert result.answer == ABSTAIN_MESSAGE
+        assert result.abstained
+
 
 # --- Unit test for the cross-encoder reranker (mocked — no real model download) ---
 
