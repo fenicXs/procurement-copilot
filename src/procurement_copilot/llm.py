@@ -109,6 +109,27 @@ def _gemini_chat() -> BaseChatModel:
     )
 
 
+def _rc_chat() -> BaseChatModel:
+    """ASU Research Computing gateway (OpenAI-compatible /chat/completions)."""
+    from langchain_openai import ChatOpenAI
+    from pydantic import SecretStr
+
+    base_url = _get_key("RC_BASE_URL")
+    api_key = _get_key("RC_API_KEY")
+    if not (base_url and api_key):
+        raise RuntimeError("LLM_PROVIDER=rc needs RC_BASE_URL and RC_API_KEY.")
+    model = _get_key("RC_MODEL") or settings.RC_MODEL
+    logger.info("Using ASU RC LLM provider (%s).", model)
+    return ChatOpenAI(
+        model=model,
+        base_url=base_url,
+        api_key=SecretStr(api_key),
+        temperature=0,
+        max_retries=3,
+        timeout=120,  # a hung gateway call must fail, not stall an eval run for an hour
+    )
+
+
 def get_llm(provider_override: str | None = None) -> Runnable | BaseChatModel | None:
     """Best available chat model, wrapped with an automatic fallback provider.
 
@@ -153,6 +174,9 @@ def _get_primary_llm(provider_override: str | None = None) -> BaseChatModel | No
 
     if provider == "gemini":
         return _gemini_chat()
+
+    if provider == "rc":
+        return _rc_chat()
 
     if provider in ("", "openai") and _get_key("OPENAI_API_KEY"):
         from langchain_openai import ChatOpenAI

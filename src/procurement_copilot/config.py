@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     # — keep it out of the deploy config. ---
     RC_BASE_URL: str = ""
     RC_API_KEY: str = ""
+    # Chat model used when LLM_PROVIDER=rc (offline eval runs; same gateway).
+    RC_MODEL: str = "gpt-oss-120b"
 
     # --- Evaluation (RAGAS) ---
     # Forces the local, free judge regardless of which provider answers

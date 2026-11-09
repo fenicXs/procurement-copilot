@@ -66,6 +66,36 @@ def test_get_llm_groq_override(monkeypatch):
     assert llm.model_name == settings.GROQ_MODEL
 
 
+def test_get_llm_rc_override(monkeypatch):
+    from langchain_openai import ChatOpenAI
+
+    monkeypatch.setenv("LLM_PROVIDER", "rc")
+    monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "")
+    monkeypatch.setenv("RC_BASE_URL", "https://rc.example/v1")
+    monkeypatch.setenv("RC_API_KEY", "rc-fake")
+    monkeypatch.setenv("RC_MODEL", "qwen35-122b-a10b")
+
+    llm = get_llm()
+
+    assert isinstance(llm, ChatOpenAI)
+    assert llm.model_name == "qwen35-122b-a10b"
+    assert llm.openai_api_base == "https://rc.example/v1"
+
+
+def test_get_llm_rc_requires_credentials(monkeypatch):
+    import pytest
+
+    monkeypatch.setenv("LLM_PROVIDER", "rc")
+    monkeypatch.setenv("LLM_FALLBACK_PROVIDER", "")
+    monkeypatch.setenv("RC_BASE_URL", "")
+    monkeypatch.setenv("RC_API_KEY", "")
+    monkeypatch.setattr(settings, "RC_BASE_URL", "")
+    monkeypatch.setattr(settings, "RC_API_KEY", "")
+
+    with pytest.raises(RuntimeError, match="RC_BASE_URL"):
+        get_llm()
+
+
 def test_get_llm_gemini_override(monkeypatch):
     from langchain_google_genai import ChatGoogleGenerativeAI
 
